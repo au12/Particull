@@ -1,6 +1,6 @@
 {
   "name": "particull",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "A simple, self-hosted parts inventory for makers: track what you have and check project BOMs against it.",
   "type": "module",
   "private": true,
