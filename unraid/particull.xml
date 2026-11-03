@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>particull</Name>
+  <Repository>ghcr.io/au12/particull:latest</Repository>
+  <Registry>https://github.com/au12/particull/pkgs/container/particull</Registry>
+  <Network>bridge</Network>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/au12/particull/issues</Support>
+  <Project>https://github.com/au12/particull</Project>
+  <Overview>A simple parts inventory for makers. Keep track of the components you have, import a project's bill of materials, and see what's in stock, what needs a quick check, and what to buy. Exports your inventory as chat context so project builds can use parts you already own.</Overview>
+  <Category>Tools: Productivity:</Category>
+  <WebUI>http://[IP]:[PORT:8080]/</WebUI>
+  <Icon>https://raw.githubusercontent.com/au12/particull/master/icon.png</Icon>
+  <Config Name="Web port" Target="8080" Default="8097" Mode="tcp" Description="Port for the web UI." Type="Port" Display="always" Required="true" Mask="false">8097</Config>
+  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/particull" Mode="rw" Description="The parts database (particull.db). Back up this folder." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/particull</Config>
+  <Config Name="Password" Target="PASSWORD" Default="" Description="Leave empty for open access on your LAN. Set one to require sign-in, for example when it's reachable through your reverse proxy." Type="Variable" Display="always" Required="false" Mask="true"></Config>
+  <Config Name="Behind a reverse proxy" Target="TRUST_PROXY" Default="true" Description="true when served through Nginx Proxy Manager or another proxy, so sign-in cookies are marked secure and login limits see real client addresses." Type="Variable" Display="always" Required="false" Mask="false">true</Config>
+  <Config Name="Time zone" Target="TZ" Default="America/New_York" Description="Used for dates in exports and backups." Type="Variable" Display="advanced" Required="false" Mask="false">America/New_York</Config>
+  <Config Name="PUID" Target="PUID" Default="99" Description="User that owns the database file." Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="100" Description="Group that owns the database file." Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
+</Container>

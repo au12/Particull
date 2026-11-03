@@ -1,263 +1,125 @@
-# Binner
-[![GitHub release](https://img.shields.io/github/release/replaysMike/Binner.svg?logo=github)](https://GitHub.com/replaysMike/Binner/releases/)
-[![Docker Image Version](https://img.shields.io/docker/v/binnerofficial/binner?logo=docker)](https://hub.docker.com/r/binnerofficial/binner)
-[![Github all releases](https://img.shields.io/github/downloads/replaysMike/Binner/total.svg)](https://GitHub.com/replaysMike/Binner/releases/)
-[![GitHub commits](https://img.shields.io/github/commits-since/replaysMike/Binner/v1.0.1.svg)](https://GitHub.com/replaysMike/Binner/commit/)
-[![GitHub contributors](https://img.shields.io/github/contributors/replaysMike/Binner.svg)](https://GitHub.com/replaysMike/Binner/graphs/contributors/)
-[![GitHub license](https://img.shields.io/github/license/replaysMike/Binner.svg)](https://github.com/replaysMike/Binner/blob/master/LICENSE)
-[![Build status](https://ci.appveyor.com/api/projects/status/gqsaearpptgdn6g8/branch/master?svg=true)](https://ci.appveyor.com/project/MichaelBrown/binner)
+<p align="center"><img src="icon.png" width="96" alt=""></p>
 
-Binner is a free open-source parts inventory tracking system you can run locally in Windows or Unix environments. It was created for makers (like myself), hobbyists or professionals to keep track of your parts inventory.
+# Particull
 
-# Screenshots
+A simple, self-hosted parts inventory for makers. Keep track of the microcontrollers, passives and odds and ends in your drawers, then paste in a project's bill of materials and see what you have, what needs a quick check, and what to buy.
 
-![Binner](https://github.com/replaysMike/Binner/wiki/binner-v2.4.png)
+It is a ground-up rebuild of [Binner](https://github.com/replaysMike/Binner), cut down to what a hobby bench needs: no supplier accounts, no order imports, no forms full of parameters.
 
-## Features
-* Standard inventory management input
-* Import your orders from Digikey, Mouser, Arrow, or ~AliExpress~
-* Customizable nested category placement
-* Track parts by Project
-* Automated datasheet retrieval / Datasheet search
-* Automated part lookup on Digikey/Mouser/Arrow/Octopart/Nexar/TME
-* Flexible search engine
-* Export your data to CSV / Excel if you need
-* Proprietary file-based database (or use providers for other formats such as SQL Server)
-* No web server installation required, uses standalone Kestrel service API
-* Based on .Net - runs on Windows, Unix and embedded devices like Raspberry PI
-* Simple web-based UI
-* Barcoding support
-* Label printing
-* KiCad HTTP Library support
-* Supports adding custom fields to your data
+![Parts on desktop](docs/screenshots/desktop-parts.png)
 
-## Limitations
+<p>
+  <img src="docs/screenshots/mobile-parts.png" width="32%" alt="Parts on a phone">
+  <img src="docs/screenshots/mobile-project.png" width="32%" alt="A project's BOM on a phone">
+  <img src="docs/screenshots/mobile-add-dark.png" width="32%" alt="Adding a part, dark theme">
+</p>
 
-We try to include as many features as possible in the free open-source version. 
-In order to keep active development going additional features and limitations can be unlocked with a [paid license](https://binner.io/signup).
+## What it does
 
-* Max 3 Users (additional users can be unlocked with a subscription)
+- **Fast hand entry.** A part needs a name and a quantity. Category and location are optional, autocomplete from what you've used, and carry over to the next part so a run of resistors goes quickly. Package, part number, notes, link and a low-stock warning sit behind "More details".
+- **Catches duplicates while you type.** Start typing "10K ohm resistor" and it points out the "10k resistor" you already have, with a button to add to that one instead.
+- **Paste a list.** Lines like `10x 10k resistor 0805`, `ESP32-S3 dev board ×2`, a Markdown table or a CSV all work. You get a preview, and rows that match an existing part can be added to it.
+- **Projects check a BOM against your parts.** Import a BOM (Markdown table, CSV, KiCad BOM export, or one part per line) and every line comes back as in stock, short, to buy, or to check. Set how many you're building and the quantities follow.
+- **Near-matches are flagged for you to approve.** "10K ohm res", "R 10k" and "10kΩ resistor" are recognised as your "10k resistor"; "0.1uF" matches "100nF"; "AMS1117 3.3V LDO" matches "AMS1117-3.3 regulator". Different values (10k vs 4.7k), types (resistor vs potentiometer) or voltages are never suggested, and a package mismatch is shown as a warning. Approving a match can remember the BOM's wording as another name for the part, so next time it matches on its own.
+- **Shopping list and builds.** Copy or download what's missing. When the order arrives, "I got these" adds it all to your parts, creating any that are new. "Build" takes a project's parts out of inventory, with undo.
+- **Export for chat.** One click gives you your inventory as a compact Markdown list to paste into a chat with Claude, with a note asking for any BOM in the table format Particull imports.
+- **Cost tracking is off by default.** Turn it on in Settings to get a unit cost per part, an inventory total and project cost estimates. Off, prices are nowhere in the interface.
+- Works well on a phone: bottom navigation, bottom sheets, large steppers. Light and dark themes.
 
-## Planned Upcoming Features for 2025
-- [x] Dedicated datasheet repository (Q1)
-- [x] Schematics repository for example circuits per part (Q1)
-- [x] Local upload of datasheets/images
-- [x] Integration of Arrow's API for orders and parts (Q1)
-- [x] Multiple language support (Q1)
-- [x] Auto update (Q1)
-- [x] Full BOM / PCB management (Q1)
-- [x] TME parts api support (Q2)
-- [x] KiCad HTTP Library api support (Q2)
-- [x] Ability to add custom fields (Q2)
-- [ ] Electronic bins support (Q2)
-- [ ] Maybe a parts marketplace? with lasers?
+![A project on desktop, dark theme](docs/screenshots/desktop-project-dark.png)
 
-## Installation
+## Using it with Claude
 
-Binner is a cross-platform distribution and runs on Windows, Raspberry Pi OS, Ubuntu, Docker and more!
+1. On the **Parts** page, choose **Export for chat** and copy the text.
+2. Paste it into a chat and describe what you want to build. The export already asks for the BOM as a `Qty | Part | Part number | Package | Notes` table, using your part names where you have them.
+3. Create a project and paste the table into **Bill of materials** (or **Import BOM** on an existing project).
+4. Review the lines marked **To check**, then use the shopping list for the rest.
 
-### Installation on Docker
+If you're starting a chat without the export, **Copy BOM instructions for Claude** in the import sheet gives you just the format request.
 
-Pull the latest Docker image and run an instance using `docker run --name Binner -d binnerofficial/binner:latest`.
+## Run it
 
-Docker is best configured using `docker compose`. Full Docker installation details available at [Docker Hub](https://hub.docker.com/r/binnerofficial/binner) or the [official wiki](https://github.com/replaysMike/Binner/wiki/Docker).
-
-### Installation on Windows
-
-Download the Windows installer from the [latest release](https://github.com/replaysMike/Binner/releases) [![GitHub release](https://img.shields.io/github/release/replaysMike/Binner.svg)](https://GitHub.com/replaysMike/Binner/releases/).
-
-Binner can be run as a standalone console application, or as a service.
-
-To run as a service, run the following in an Administrative console:
-
-```ps
-.\Binner.Web install
-.\Binner.Web start
-```
-Other commands are available to manage the service such as `uninstall`, `stop`, `help`.
-
-To run as a console application:
-```ps
-.\Binner.Web.exe
+```sh
+docker compose up -d --build
 ```
 
-Proceed to the web interface at https://localhost:8090 to start using Binner!
+Then open `http://<server>:8097`.
 
-### Login
+`docker-compose.yml` builds the image from this folder. Once the GitHub workflow has published it, remove the `build: .` line to pull `ghcr.io/au12/particull:latest` instead.
 
-The first time you login you will be prompted for a username and password. The default credentials are:
+To run without Docker you need Node 22.13 or newer (for the built-in SQLite module):
 
-Username: _admin_
-
-Password: _admin_
-
-### Installation on Ubuntu
-
-Download the ubuntu.14.04-x64.tar.gz from the [latest release](https://github.com/replaysMike/Binner/releases) [![GitHub release](https://img.shields.io/github/release/replaysMike/Binner.svg)](https://GitHub.com/replaysMike/Binner/releases/).
-
-```bash
-// extract the archive
-tar zxfp ./Binner_ubuntu.14.04-x64-VERSION.tar.gz
-
-// to install as a service
-sudo chmod +x ./install-as-service.sh
-sudo ./install-as-service.sh
-
-// or you can just run directly
-sudo chmod +x ./Binner.Web
-./Binner.Web
+```sh
+cd app
+npm start            # http://localhost:8080, data in app/data
+npm test
+node scripts/seed-demo.js http://localhost:8080   # optional sample parts and projects
 ```
 
-### Installation on Raspberry Pi OS
+There are no npm dependencies to install.
 
-Download the linux-arm.tar.gz from the [latest release](https://github.com/replaysMike/Binner/releases) [![GitHub release](https://img.shields.io/github/release/replaysMike/Binner.svg)](https://GitHub.com/replaysMike/Binner/releases/).
+## Unraid
 
-```bash
-// extract the archive
-tar zxfp Binner_linux-arm-VERSION.tar.gz
+Either use the compose file with the Compose Manager plugin, or add it as a regular container:
 
-// to install as a service
-sudo chmod +x ./install-as-service.sh
-sudo ./install-as-service.sh
+1. Copy `unraid/particull.xml` to `/boot/config/plugins/dockerMan/templates-user/my-particull.xml`.
+2. In **Docker → Add Container**, choose the **particull** template.
+3. Keep **Data** at `/mnt/user/appdata/particull` and **PUID/PGID** at `99`/`100`, and apply.
 
-// or you can just run directly
-sudo chmod +x ./Binner.Web
-./Binner.Web
+If the GHCR package is private (it is by default when the repo is private), log in once from the Unraid terminal so it can pull:
+
+```sh
+docker login ghcr.io -u au12    # password: a GitHub token with read:packages
 ```
 
-See the [Wiki](https://github.com/replaysMike/Binner/wiki/Installation-on-Linux) for help installing on other platforms.
+## Nginx Proxy Manager
 
-## Description
+Add a proxy host, for example `parts.yourdomain`:
 
-Binner is designed for electronics in mind, however it could be used for other types of inventory management (chemistry, retail). It is purpose built for quick data entry and fast performance. I built it because I couldn't find good free alternatives for tracking inventory in my home maker lab - it's easy to forget what you bought and where you put them and I end up sometimes ordering things I already have around. Saves money and time! It's built on .Net Core / C# with a React js front end.
+- **Scheme** `http`, **Forward hostname/IP** your Unraid address, **Forward port** `8097`.
+- On the **SSL** tab, request a certificate and turn on **Force SSL**.
+- Set `TRUST_PROXY=true` on the container. If the host is reachable from the internet, also set `PASSWORD`.
 
-I welcome all who want to contribute to this project, and please suggest features in the Issues section.
+## Settings
 
-## What if I want to use it but not to install it myself?
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `PORT` | `8080` | Port inside the container. |
+| `DATA_DIR` | `/data` | Where the database lives. Map it to a host folder. |
+| `PUID` / `PGID` | `1000` / `1000` | Owner of the database file. Use `99` / `100` on Unraid. |
+| `PASSWORD` | empty | Empty means anyone who can reach the page can use it. Set one to require sign-in. Sessions last 90 days; changing the password signs everyone out. |
+| `TRUST_PROXY` | `false` | Set to `true` behind a reverse proxy so the sign-in cookie is marked secure and login limits use the real client address. |
+| `TZ` | UTC | Time zone for dates in exports and backup file names. |
 
-A free online version of Binner is available at [Binner.io](http://binner.io). This service offers both free and paid subscriptions based on inventory size requirements and additional features. Compared to other options out there it's incredibly useful for makers, and it helps me keep this project alive!
+Cost tracking, theme and chat export defaults are set in the app under **Settings**.
 
-## Getting Help
+## Data and backups
 
-Help with your installation, questions, reporting bugs, suggesting features can be provided in multiple ways:
+Everything is in one SQLite file, `/data/particull.db` (with its `-wal` and `-shm` companions while running). Back up the `/data` folder, or use **Settings → Download backup** for a single JSON file with all parts, projects and settings. **Restore a backup** replaces everything with the file's contents.
 
-* If you simply have a question or need help with installation issues, you have 2 options:
-  * create a post in [Discussions](https://github.com/replaysMike/Binner/discussions)
-  * join our [Discord server](https://discord.gg/74GEJY5g7G) for a more real-time response
-* If you are reporting a bug or suggesting a feature, create a [New Issue](https://github.com/replaysMike/Binner/issues)
+**Settings → Import parts from a CSV** opens a spreadsheet export in the paste preview, so you can bring an existing list across. Column names like Qty, Name, Part number, Package, Category and Location are recognised.
 
-## Storage Provider
+## BOM formats
 
-Binner supports multiple storage providers. If your needs are simple, you can continue to use the built-in `Binner` storage provider which is configured by default. Alternatively, you can specify to use any of the following supported storage providers:
+Particull reads whatever you paste and works out the shape:
 
-* Binner
-* SqlServer
-* Postgresql
-* MySql
-* Sqlite
+- **Markdown tables** with any of these columns: Qty/Quantity, Part/Name/Item, Value, Part number/MPN, Package/Footprint, References/Designators, Notes/Description. Surrounding text and a Total row are ignored.
+- **CSV, TSV or semicolon files** with a header row. KiCad BOM exports work: `10k` with reference `R1` becomes "10k resistor", and footprints like `R_0805_2012Metric` become `0805`.
+- **Plain lists**, one part per line: `10x 10k resistor`, `10 x …`, `×10`, `(x10)`, `name, 10`, `10 pcs …`. Bullets and checkboxes are stripped. A heading or a line like `Passives:` sets the category for the lines under it. Lines without a quantity count as 1 and are marked in the preview.
 
-### Configuring Binner Provider (default)
-In `appsettings.json` under `StorageProviderConfiguration` set the `Provider` to `Binner` and under `ProviderConfiguration` specify the database file location as `"Filename": "C:\\Binner\\binner.db"` or the location of your choice. It should look like the following:
+## How it's built
 
-```json
-"StorageProviderConfiguration": {
-    "Provider": "Binner",
-    "ProviderConfiguration": {
-      "Filename": "C:\\Binner\\binner.db" // for unix environments use: "./binner.db"
-    }
-  },
- ```
+One Node process using only built-in modules: `node:http` for the server and `node:sqlite` for storage. The web app is plain JavaScript modules with no build step. Part matching (unit and value normalisation, synonyms, package codes, part-number similarity) lives in `app/public/shared/match.js` and runs on the server; the same parser is shared with the browser.
 
-### Configuring SQL Server
+```
+app/server.js            HTTP API, static files, optional password
+app/db.js                schema, parts, projects, BOM lines, builds, backups
+app/export.js            chat export, shopping list, BOM export
+app/public/shared/       BOM/list parser and fuzzy matcher
+app/public/js/           the web app
+unraid/particull.xml     Unraid container template
+```
 
-In `appsettings.json` under `StorageProviderConfiguration` set the `Provider` to `SqlServer`. Example:
+## License
 
-```json
-"StorageProviderConfiguration": {
-    "Provider": "SqlServer",
-    "ProviderConfiguration": {
-      "ConnectionString": "Server=localhost;Database=Binner;Trusted_Connection=True;TrustServerCertificate=True;Integrated Security=True;"
-    }
-  },
- ```
- 
-### Configuring Postgresql
-
-In `appsettings.json` under `StorageProviderConfiguration` set the `Provider` to `Postgresql`. Example:
-
-```json
-"StorageProviderConfiguration": {
-    "Provider": "Postgresql",
-    "ProviderConfiguration": {
-      "ConnectionString": "Server=localhost;Port=5432;Database=Binner;Userid=postgres;Password=password;SslMode=Disable;Persist Security Info=true;"
-    }
-  },
- ```
- 
- ### Configuring MySql / MariaDb
-
-In `appsettings.json` under `StorageProviderConfiguration` set the `Provider` to `MySql`. Example:
-
-```json
-"StorageProviderConfiguration": {
-    "Provider": "MySql",
-    "ProviderConfiguration": {
-      "ConnectionString": "Server=localhost;Database=Binner;Uid=root;Pwd=password;"
-    }
-  },
- ```
- 
-### Configuring Sqlite
-
-In `appsettings.json` under `StorageProviderConfiguration` set the `Provider` to `Sqlite`. Example:
-
-```json
-"StorageProviderConfiguration": {
-    "Provider": "Sqlite",
-    "ProviderConfiguration": {
-      "ConnectionString": "Server=localhost;Database=Binner;Uid=root;Pwd=password;"
-    }
-  },
- ```
-
-## Integrations
-
-Currently supports _Digikey_, _Mouser_, _Octopart_ and ~_AliExpress_~. For standalone installations, you will need to obtain your own API keys to enable these features. It's easy to obtain them but be aware Octopart _is not free_ so you may want to avoid using it.
-
-Integrations enable features such as automatic part metadata lookup, datasheet retrieval and automatic importing parts from your orders. To get the best out of Binner, it is a good idea to sign up for Digikey and Mouser API keys at a minimum however they are not required.
-
-### Configuring DigiKey API
-
-Visit [https://developer.digikey.com/](https://developer.digikey.com/) and sign up for a free developer account. You will be asked to create an App which will come with a `ClientId` and `ClientSecret` and needs to be set in the `appsettings.json` under the `DigiKey` configuration section.
-
-*Creating an App*
-* The API uses oAuth with postbacks so they will want you to provide an `OAuth Callback`. This can be safely set to `https://localhost:8090/Authorization/Authorize`. If you are not familiar with oAuth, Digikey will call this URL when you successfully authenticate with DigiKey. It is not called by their servers, but rather by the web UI so it does not need to resolve to an external IP. It does need to be set exactly the same in Binner's `oAuthPostbackUrl` in `appsettings.json` otherwise the API calls will not work, as this value must match on both ends.
-
-* You will want to enable API access for the `Product Information` and `Order Support` APIs.
-
-*Sandbox*
-If you wish to use the DigiKey sandbox rather than their production API, you can specify the `ApiUrl` to use `https://sandbox-api.digikey.com`. Otherwise, you can leave it set to `https://api.digikey.com`
-
-### Configuring Mouser API
-
-Visit [https://www.mouser.com/api-hub/](https://www.mouser.com/api-hub/) and sign up for a free developer account. Mouser requires you to sign up for each API product you wish to use. Currently, Binner supports both the `Search API` and `Order API` so sign up for those two APIs separately. Once you have an API key for each, set those in the `appsettings.json` under the `Mouser` configuration section.
-
-### Configuring Octopart/Nexar API
-
-Visit [https://portal.nexar.com/sign-up](https://portal.nexar.com/sign-up) and sign up for an account. Plug in your ClientId & ClientSecret in the `appsettings.json` in the `Octopart` section. Please note that Octopart/Nexar API _is not free_ to use so you may opt to skip this one.
-
-### Configuring Arrow API
-
-Visit [https://developers.arrow.com/api/index.php/site/page?view=requestAPIKey](https://developers.arrow.com/api/index.php/site/page?view=requestAPIKey) and request an API Key. If you wish to import Arrow orders you will need to know your Arrow account details as well. Once you have an API key, set those in the `appsettings.json` under the `Arrow` configuration section.
-
-### Configuring TME API
-
-Visit [https://developers.tme.eu/login](https://developers.tme.eu/login) and sign up for a free account. TME works with either an anonymous key, or a private key so it doesn't matter which you choose to go with unless you have special pricing available to you. Currently, Binner supports the `Products API` but will look at adding Order import support when TME offers this option. Once you have your anonymous and secret API keys, set those in the `appsettings.json` under the `Tme` configuration section.
-
-## Label printing
-
-Binner currently has label printing support. It works best with a Dymo LabelWriter 450 series printer (Turbo dual label is supported too), model 30346 or 30277 labels. If desired additional label sizes and other printers can be easily added. Label design can be customized with different types of barcodes and information.
-
-### Label Example
-![Binner](https://github.com/replaysMike/Binner/wiki/binner-label.png)
-
+GPL-3.0, the same as Binner, which this project started from. Fonts are Atkinson Hyperlegible Next and Atkinson Hyperlegible Mono by the Braille Institute, under the SIL Open Font License (`app/public/fonts/OFL.txt`).

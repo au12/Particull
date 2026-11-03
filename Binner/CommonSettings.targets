@@ -1,6 +1,0 @@
-<Project>
-      <PropertyGroup>
-          <LibraryVersion Condition="'$(LibraryVersion)'==''">1.0.34</LibraryVersion>
-          <DefineConstants>$(DefineConstants);INITIALCREATE</DefineConstants>
-      </PropertyGroup>
-  </Project>

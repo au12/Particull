@@ -1,0 +1,10 @@
+.git
+.github
+**/node_modules
+**/data
+app/test
+app/scripts
+docs
+unraid
+*.md
+icon.png

@@ -1,0 +1,14 @@
+{
+  "name": "particull",
+  "version": "1.0.0",
+  "description": "A simple, self-hosted parts inventory for makers: track what you have and check project BOMs against it.",
+  "type": "module",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server.js",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
+  },
+  "engines": { "node": ">=22.13" },
+  "license": "GPL-3.0"
+}
