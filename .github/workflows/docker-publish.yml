@@ -1,14 +1,17 @@
 name: Build and publish image
 
+# Every push to master publishes :latest. Bumping "version" in app/package.json
+# also tags the image with that version and creates the matching GitHub release,
+# using that version's section of CHANGELOG.md as the notes.
+
 on:
   push:
     branches: [master]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
@@ -22,8 +25,27 @@ jobs:
       - run: npm test
         working-directory: app
 
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: v
+        run: |
+          version=$(node -p "require('./app/package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" != "pull_request" ] && [ "${{ github.ref }}" = "refs/heads/master" ] && ! git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+
   image:
-    needs: test
+    needs: [test, version]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -41,8 +63,7 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=${{ needs.version.outputs.version }},enable=${{ needs.version.outputs.release == 'true' }}
             type=sha,format=short
       - uses: docker/build-push-action@v6
         with:
@@ -53,3 +74,19 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  release:
+    needs: [version, image]
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create tag and release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          awk -v v="## v$VERSION" '$0 ~ "^## " { if (found) exit; if (index($0, v) == 1) { found = 1; next } } found' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "Particull v$VERSION" > notes.md
+          printf '\n**Image:** `ghcr.io/%s:%s`\n' "${GITHUB_REPOSITORY,,}" "$VERSION" >> notes.md
+          gh release create "v$VERSION" --target "$GITHUB_SHA" --title "Particull v$VERSION" --notes-file notes.md

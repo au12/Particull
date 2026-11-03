@@ -120,6 +120,10 @@ app/public/js/           the web app
 unraid/particull.xml     Unraid container template
 ```
 
+## Releases
+
+Every push to `master` publishes `ghcr.io/au12/particull:latest`. To cut a release, bump `version` in `app/package.json` and add a matching `## vX.Y.Z` section to `CHANGELOG.md`. The next push builds the image tagged with that version and creates the GitHub release from the changelog section.
+
 ## License
 
 GPL-3.0, the same as Binner, which this project started from. Fonts are Atkinson Hyperlegible Next and Atkinson Hyperlegible Mono by the Braille Institute, under the SIL Open Font License (`app/public/fonts/OFL.txt`).
