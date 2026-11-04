@@ -87,8 +87,11 @@ after(async () => {
 test('quantity steppers save, including typed amounts', async () => {
   await goto('#/parts', '.part-row');
   const before_ = (await part('28mm 8 ohm speaker')).qty;
-  await page.click('.part-row .stepper-btn:last-child');
-  await page.click('.part-row .stepper-btn:last-child');
+  // No steppers in the list: + and - on a focused row nudge the amount.
+  assert.equal(await page.$('.part-row .stepper-btn'), null);
+  await page.focus('.part-row');
+  await page.keyboard.press('+');
+  await page.keyboard.press('+');
   await sleep(800);
   assert.equal((await part('28mm 8 ohm speaker')).qty, before_ + 2);
   await page.click('.part-row .stepper-value', { clickCount: 3 });

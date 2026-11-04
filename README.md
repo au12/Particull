@@ -17,6 +17,7 @@ It is a ground-up rebuild of [Binner](https://github.com/replaysMike/Binner), cu
 
 ## What it does
 
+- **A clean list.** Each part shows its amount on the right. Click the number to type a new one, or focus a row and press + or −.
 - **Fast hand entry.** A part needs a name and an amount. Category and location are optional, autocomplete from what you've used, and carry over to the next part so a run of similar parts goes quickly. Package, part number, notes, link and a low-stock warning sit behind "More details".
 - **Count it, or don't.** Each part is either counted exactly or marked **Plenty**, **Some**, **Running low** or **Out**. Nobody counts 0805 resistors; BOM checks treat Plenty and Some as in stock and list Running low as something to top up.
 - **Units.** Count pieces by default, or metres of wire, grams of filament, spools, packs. Amounts can be fractional.

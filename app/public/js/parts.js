@@ -110,9 +110,11 @@ function amountEl(p) {
       onclick: e => { e.stopPropagation(); levelMenu(e.currentTarget, state.byId.get(p.id)); },
     }, h('span.level-dot'), LEVEL_SHORT[p.stockLevel], icon('updown'));
   }
+  // Just the number: click it to type a new amount. Arrow keys and +/- on the row still nudge it.
   const st = stepper({
     value: p.qty,
-    label: `Quantity of ${p.name}`,
+    buttons: false,
+    label: `Quantity of ${p.name}. Type a new amount.`,
     onDelta: d => changeQty(state.byId.get(p.id), { delta: d }),
     onSet: v => changeQty(state.byId.get(p.id), { set: v }),
   });

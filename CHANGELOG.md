@@ -20,7 +20,7 @@
 - Service worker: opens instantly from a saved copy and shows the last data when the server can't be reached
 
 ### Look and feel
-- Redesigned in the spirit of classic Apple tools: system font (San Francisco on Apple devices, Inter elsewhere), inset grouped lists with hairline separators, filled buttons and fields, UIStepper-style quantity controls, green switches, translucent sidebar, menus and toasts
+- Redesigned in the spirit of classic Apple tools: system font (San Francisco on Apple devices, Inter elsewhere), inset grouped lists with hairline separators, filled buttons and fields, UIStepper-style quantity controls in forms (the parts list shows just the number, click to edit), green switches, translucent sidebar, menus and toasts
 - On phones, page actions sit in a translucent top bar and the large title tucks into it as you scroll; the search bar stays pinned
 - Settings laid out as grouped sections, like the Settings app
 

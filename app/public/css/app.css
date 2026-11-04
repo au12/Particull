@@ -491,6 +491,16 @@ body.scrolled .toolbar { background: var(--bar); backdrop-filter: saturate(1.8) 
 }
 @media (max-width: 420px) { .stepper-value { width: 44px; } }
 
+/* In the parts list the amount is just a number you can click to edit. */
+.stepper-bare .stepper-value {
+  width: auto; min-width: 44px; max-width: 96px; field-sizing: content;
+  height: 32px; padding: 0 8px; border-radius: 8px;
+  cursor: text; transition: background-color 0.12s, box-shadow 0.12s;
+}
+.stepper-bare .stepper-value:hover { background: var(--fill); }
+.stepper-bare .stepper-value:focus { min-width: 64px; text-align: right; }
+@media (max-width: 759px) { .stepper-bare .stepper-value { font-size: 17px; height: 36px; } }
+
 /* Rough amounts: a pop-up button. */
 .level-pill {
   display: inline-flex; align-items: center; gap: 6px;
@@ -965,7 +975,7 @@ dialog.sheet.closing::backdrop { animation: fade-out 0.16s ease-in forwards; }
 }
 .row-check .icon { width: 13px; height: 13px; stroke-width: 3; }
 .selecting .row-check { display: grid; }
-.selecting .part-qty .stepper, .selecting .part-qty .level-pill { pointer-events: none; opacity: 0.45; }
+.selecting .part-qty .stepper, .selecting .part-qty .level-pill { pointer-events: none; opacity: 0.5; }
 .selecting .part-row { user-select: none; -webkit-user-select: none; }
 .part-row.is-selected { background: var(--accent-soft); }
 .part-row.is-selected .row-check { background: var(--accent); box-shadow: none; color: var(--accent-ink); }

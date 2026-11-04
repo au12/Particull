@@ -339,7 +339,7 @@ export function money(n, currency = '$') {
 const fmtNum = n => String(Math.round(Number(n) * 1000) / 1000);
 
 /** Quantity stepper: [−] [ n ] [+]. Calls onDelta(delta) or onSet(value). */
-export function stepper({ value, onDelta, onSet, label = 'Quantity', size = '' }) {
+export function stepper({ value, onDelta, onSet, label = 'Quantity', size = '', buttons = true }) {
   const out = h('input.stepper-value', {
     type: 'text', inputmode: 'decimal', value: fmtNum(value), 'aria-label': label, autocomplete: 'off',
     onfocus: e => e.target.select(),
@@ -358,7 +358,9 @@ export function stepper({ value, onDelta, onSet, label = 'Quantity', size = '' }
     type: 'button', 'aria-label': `${name} one`, tabindex: '-1',
     onclick: e => { e.stopPropagation(); onDelta(d); },
   }, icon(ic));
-  const el = h(`div.stepper${size ? `.stepper-${size}` : ''}`, { onclick: e => e.stopPropagation() }, btn(-1, 'minus', 'Remove'), out, btn(1, 'plus', 'Add'));
+  const el = buttons
+    ? h(`div.stepper${size ? `.stepper-${size}` : ''}`, { onclick: e => e.stopPropagation() }, btn(-1, 'minus', 'Remove'), out, btn(1, 'plus', 'Add'))
+    : h('div.stepper.stepper-bare', { onclick: e => e.stopPropagation() }, out);
   el.update = v => { value = v; if (document.activeElement !== out) out.value = fmtNum(v); };
   return el;
 }
