@@ -189,7 +189,7 @@ test('exports', () => {
   assert.doesNotMatch(md, /A1/);
   assert.match(md, /\| Qty \| Part \| Part number \| Package \| Notes \|/);
   const csv = exportInventory(parts, { format: 'csv', locations: true, notes: false, empty: true, cost: false, currency: '$' });
-  assert.equal(csv.split('\r\n')[0], 'Qty,Name,Category,Part number,Package,Location');
+  assert.equal(csv.split('\r\n')[0], 'Qty,Unit,Name,Category,Part number,Package,Location');
   const list = shoppingList({ name: 'X', builds: 1, lines: [{ status: 'short', short: 2, have: 1, need: 3, name: 'LED', mpn: '', package: '' }] });
   assert.match(list, /- 2 × LED — have 1, need 3/);
 });

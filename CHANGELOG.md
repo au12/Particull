@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Parts
+- Plenty / Some / Running low / Out as an alternative to exact counts; BOM checks treat Plenty and Some as in stock and list Running low to top up
+- Units per part (m, g, spool, pack…) and fractional amounts
+- Add a kit: resistors (E6/E12/E24), ceramic and electrolytic capacitors, LEDs, connectors, diodes and transistors, screws and standoffs
+- Select parts (or long-press on a phone) to move, recategorize, change how they're counted, merge or delete them together, with undo
+- Merge duplicate parts: amounts add up, names become aliases, project lines follow
+- Search understands values: `4k7`, `0.1u`, `3v3`
+
+### Projects
+- Status (Idea, Planned, Building, Done), grouped in the list; archive finished projects
+- Building a planned project marks it Building
+
+### Export and data
+- Chat export collapses runs of resistors and capacitors into one line per kind and package
+- Scheduled database backups (every 6 hours, daily or weekly) with a keep limit, back up now, restore from any backup or a .db file, and a safety copy before every restore
+- Service worker: opens instantly from a saved copy and shows the last data when the server can't be reached
+
+### Under the hood
+- Browser tests for the main flows and a container smoke test run in CI before the image is published
+- Transactions nest safely (fixes undo after deleting several parts)
+
 ## v0.1.0 (2026-11-03)
 
 First release of Particull: a simple, self-hosted parts inventory for makers that checks project BOMs against what you have. A ground-up rebuild of Binner with the supplier integrations removed.

@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { findMatches, MATCH_SUGGEST, compact } from './public/shared/match.js';
+import { LEVELS, roundQty } from './public/shared/stock.js';
 
 export const DEFAULT_SETTINGS = {
   costTracking: false,
@@ -11,7 +12,14 @@ export const DEFAULT_SETTINGS = {
   exportIncludeLocations: false,
   exportIncludeNotes: true,
   exportIncludeEmpty: false,
+  exportCompact: true,
+  backupFrequency: 'daily',
+  backupKeep: 14,
+  backupHour: 3,
 };
+
+export const BACKUP_FREQUENCIES = ['off', '6h', 'daily', 'weekly'];
+export const PROJECT_STATUSES = ['idea', 'planned', 'building', 'done'];
 
 const SCHEMA = [
   // v1
@@ -67,6 +75,13 @@ const SCHEMA = [
     created_at TEXT NOT NULL
   );
   `,
+  // v2: rough stock levels, units, project status and archiving
+  `
+  ALTER TABLE parts ADD COLUMN stock_level TEXT;
+  ALTER TABLE parts ADD COLUMN unit TEXT NOT NULL DEFAULT '';
+  ALTER TABLE projects ADD COLUMN status TEXT NOT NULL DEFAULT 'planned';
+  ALTER TABLE projects ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 // Line states:
@@ -84,8 +99,17 @@ const int = (v, d = 0) => {
   const n = Math.round(Number(v));
   return Number.isFinite(n) ? n : d;
 };
-const optInt = v => (v === '' || v == null || !Number.isFinite(Number(v)) ? null : Math.max(0, Math.round(Number(v))));
 const optNum = v => (v === '' || v == null || !Number.isFinite(Number(v)) ? null : Math.max(0, Number(v)));
+const qtyNum = (v, d = 0) => {
+  const n = roundQty(v);
+  return Number.isFinite(n) ? Math.max(0, n) : d;
+};
+const lineQty = v => {
+  const n = roundQty(v);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+};
+const levelOf = v => (LEVELS.includes(v) ? v : null);
+const ids = list => [...new Set((Array.isArray(list) ? list : []).map(x => int(x)).filter(x => x > 0))];
 
 function cleanAliases(list, name) {
   const seen = new Set([compact(name)]);
@@ -119,8 +143,11 @@ export class Store {
     }
   }
 
+  /** Run fn in a transaction. Nested calls join the outer transaction. */
   tx(fn) {
+    if (this.inTx) return fn();
     this.db.exec('BEGIN');
+    this.inTx = true;
     try {
       const r = fn();
       this.db.exec('COMMIT');
@@ -128,6 +155,8 @@ export class Store {
     } catch (e) {
       this.db.exec('ROLLBACK');
       throw e;
+    } finally {
+      this.inTx = false;
     }
   }
 
@@ -153,6 +182,9 @@ export class Store {
       if (typeof def === 'boolean') val = Boolean(v);
       else if (k === 'theme') val = ['system', 'light', 'dark'].includes(v) ? v : 'system';
       else if (k === 'currency') val = str(v, 4) || '$';
+      else if (k === 'backupFrequency') val = BACKUP_FREQUENCIES.includes(v) ? v : 'daily';
+      else if (k === 'backupKeep') val = Math.min(365, Math.max(1, int(v, 14)));
+      else if (k === 'backupHour') val = Math.min(23, Math.max(0, int(v, 3)));
       stmt.run(k, JSON.stringify(val));
     }
     return this.getSettings();
@@ -166,7 +198,8 @@ export class Store {
     return {
       id: r.id, name: r.name, qty: r.qty, category: r.category, location: r.location,
       mpn: r.mpn, package: r.package, notes: r.notes, link: r.link, aliases,
-      minQty: r.min_qty, cost: r.cost, createdAt: r.created_at, updatedAt: r.updated_at,
+      minQty: r.min_qty, cost: r.cost, stockLevel: r.stock_level || null, unit: r.unit || '',
+      createdAt: r.created_at, updatedAt: r.updated_at,
     };
   }
 
@@ -183,7 +216,9 @@ export class Store {
     if (!name) throw Object.assign(new Error('A part needs a name.'), { status: 400 });
     return {
       name,
-      qty: Math.max(0, int(p.qty ?? existing.qty ?? 0)),
+      qty: qtyNum(p.qty ?? existing.qty ?? 0),
+      stockLevel: 'stockLevel' in p ? levelOf(p.stockLevel) : (existing.stockLevel ?? null),
+      unit: str(p.unit ?? existing.unit ?? '', 16).toLowerCase() === 'pcs' ? '' : str(p.unit ?? existing.unit ?? '', 16),
       category: str(p.category ?? existing.category ?? '', 80),
       location: str(p.location ?? existing.location ?? '', 80),
       mpn: str(p.mpn ?? existing.mpn ?? '', 120),
@@ -191,7 +226,7 @@ export class Store {
       notes: text(p.notes ?? existing.notes ?? '', 2000),
       link: str(p.link ?? existing.link ?? '', 1000),
       aliases: cleanAliases(p.aliases ?? existing.aliases ?? [], name),
-      minQty: 'minQty' in p ? optInt(p.minQty) : (existing.minQty ?? null),
+      minQty: 'minQty' in p ? optNum(p.minQty) : (existing.minQty ?? null),
       cost: 'cost' in p ? optNum(p.cost) : (existing.cost ?? null),
     };
   }
@@ -199,9 +234,9 @@ export class Store {
   createPart(input, { id } = {}) {
     const p = this.normalizePart(input);
     const t = now();
-    const sql = `INSERT INTO parts (${id ? 'id, ' : ''}name, qty, category, location, mpn, package, notes, link, aliases, min_qty, cost, created_at, updated_at)
-      VALUES (${id ? '?, ' : ''}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-    const args = [p.name, p.qty, p.category, p.location, p.mpn, p.package, p.notes, p.link, JSON.stringify(p.aliases), p.minQty, p.cost, input.createdAt || t, t];
+    const sql = `INSERT INTO parts (${id ? 'id, ' : ''}name, qty, category, location, mpn, package, notes, link, aliases, min_qty, cost, stock_level, unit, created_at, updated_at)
+      VALUES (${id ? '?, ' : ''}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+    const args = [p.name, p.qty, p.category, p.location, p.mpn, p.package, p.notes, p.link, JSON.stringify(p.aliases), p.minQty, p.cost, p.stockLevel, p.unit, input.createdAt || t, t];
     const r = this.db.prepare(sql).run(...(id ? [int(id), ...args] : args));
     this.matchCache.clear();
     return this.getPart(Number(r.lastInsertRowid));
@@ -211,15 +246,91 @@ export class Store {
     const existing = this.getPart(id);
     if (!existing) return null;
     const p = this.normalizePart(patch, existing);
-    this.db.prepare(`UPDATE parts SET name=?, qty=?, category=?, location=?, mpn=?, package=?, notes=?, link=?, aliases=?, min_qty=?, cost=?, updated_at=? WHERE id=?`)
-      .run(p.name, p.qty, p.category, p.location, p.mpn, p.package, p.notes, p.link, JSON.stringify(p.aliases), p.minQty, p.cost, now(), existing.id);
+    this.db.prepare(`UPDATE parts SET name=?, qty=?, category=?, location=?, mpn=?, package=?, notes=?, link=?, aliases=?, min_qty=?, cost=?, stock_level=?, unit=?, updated_at=? WHERE id=?`)
+      .run(p.name, p.qty, p.category, p.location, p.mpn, p.package, p.notes, p.link, JSON.stringify(p.aliases), p.minQty, p.cost, p.stockLevel, p.unit, now(), existing.id);
     this.matchCache.clear();
     return this.getPart(existing.id);
   }
 
   adjustQty(id, delta) {
-    const r = this.db.prepare('UPDATE parts SET qty = MAX(0, qty + ?), updated_at = ? WHERE id = ?').run(int(delta), now(), int(id));
+    const r = this.db.prepare('UPDATE parts SET qty = MAX(0, ROUND(qty + ?, 3)), updated_at = ? WHERE id = ?').run(roundQty(delta) || 0, now(), int(id));
     return r.changes ? this.getPart(id) : null;
+  }
+
+  /**
+   * Add stock that arrived. Counted parts go up by the amount; a part tracked by level
+   * that was low or out goes back to Plenty.
+   */
+  addStock(id, amount) {
+    const part = this.getPart(id);
+    if (!part) return null;
+    if (part.stockLevel) {
+      if (part.stockLevel === 'low' || part.stockLevel === 'out') return this.updatePart(part.id, { stockLevel: 'plenty' });
+      return part;
+    }
+    return this.adjustQty(part.id, Math.max(0, roundQty(amount) || 0));
+  }
+
+  /** Change several parts at once: category, location, unit or how stock is tracked. */
+  bulkUpdate(partIds, patch = {}) {
+    const allowed = {};
+    if ('category' in patch) allowed.category = patch.category;
+    if ('location' in patch) allowed.location = patch.location;
+    if ('unit' in patch) allowed.unit = patch.unit;
+    if ('stockLevel' in patch) allowed.stockLevel = patch.stockLevel;
+    if (!Object.keys(allowed).length) throw Object.assign(new Error('Nothing to change.'), { status: 400 });
+    return this.tx(() => ids(partIds).map(id => this.updatePart(id, allowed)).filter(Boolean));
+  }
+
+  /** Delete several parts. Returns what's needed to put them back. */
+  bulkDelete(partIds) {
+    return this.tx(() => ids(partIds).map(id => {
+      const lineIds = this.linesUsingPart(id);
+      const part = this.deletePart(id);
+      return part && { part, lineIds };
+    }).filter(Boolean));
+  }
+
+  restoreMany(removed) {
+    return this.tx(() => (removed || []).map(r => this.restorePart(r.part, r.lineIds)));
+  }
+
+  /**
+   * Fold other parts into one. Quantities add up, the other names become aliases,
+   * empty fields are filled from the others, and BOM lines and build history follow.
+   */
+  mergeParts(keepId, otherIds) {
+    const keep = this.getPart(keepId);
+    if (!keep) throw Object.assign(new Error('That part no longer exists.'), { status: 404 });
+    const others = ids(otherIds).filter(id => id !== keep.id).map(id => this.getPart(id)).filter(Boolean);
+    if (!others.length) throw Object.assign(new Error('Pick at least two parts to merge.'), { status: 400 });
+    return this.tx(() => {
+      const next = { ...keep };
+      const rank = { plenty: 3, some: 2, low: 1, out: 0 };
+      for (const o of others) {
+        if (next.stockLevel || o.stockLevel) {
+          // A level beats a count; between two levels, keep the better one.
+          const a = next.stockLevel, b = o.stockLevel;
+          next.stockLevel = !a ? b : !b ? a : (rank[a] >= rank[b] ? a : b);
+        }
+        next.qty = roundQty(next.qty + o.qty);
+        for (const f of ['category', 'location', 'mpn', 'package', 'link', 'unit']) if (!next[f] && o[f]) next[f] = o[f];
+        if (o.notes && !next.notes.includes(o.notes)) next.notes = next.notes ? `${next.notes}\n${o.notes}` : o.notes;
+        if (next.minQty == null) next.minQty = o.minQty;
+        if (next.cost == null) next.cost = o.cost;
+        next.aliases = [...next.aliases, o.name, ...o.aliases];
+        this.db.prepare('UPDATE bom_lines SET part_id = ? WHERE part_id = ?').run(keep.id, o.id);
+        for (const b of this.db.prepare('SELECT id, changes FROM builds').all()) {
+          const changes = JSON.parse(b.changes);
+          if (!changes.some(c => c.partId === o.id)) continue;
+          this.db.prepare('UPDATE builds SET changes = ? WHERE id = ?').run(JSON.stringify(changes.map(c => (c.partId === o.id ? { ...c, partId: keep.id } : c))), b.id);
+        }
+        this.db.prepare('DELETE FROM parts WHERE id = ?').run(o.id);
+      }
+      const merged = this.updatePart(keep.id, next);
+      this.matchCache.clear();
+      return { part: merged, removed: others.map(o => o.id) };
+    });
   }
 
   linesUsingPart(id) {
@@ -261,7 +372,10 @@ export class Store {
       const touched = [];
       for (const r of rows || []) {
         if (r.mergeInto) {
-          const p = this.adjustQty(r.mergeInto, Math.max(0, int(r.qty)));
+          // A kit added as "Plenty" or "Some" sets the level; a counted amount adds to the stock.
+          const target = this.getPart(r.mergeInto);
+          const level = levelOf(r.stockLevel);
+          const p = !target ? null : level ? this.updatePart(target.id, { stockLevel: level }) : this.addStock(target.id, r.qty);
           if (p) { merged++; touched.push(p); continue; }
         }
         touched.push(this.createPart(r));
@@ -279,7 +393,7 @@ export class Store {
   }
 
   groups() {
-    const q = field => this.db.prepare(`SELECT ${field} AS name, COUNT(*) AS parts, SUM(qty) AS pieces FROM parts WHERE ${field} != '' GROUP BY ${field} ORDER BY ${field} COLLATE NOCASE`).all().map(r => ({ ...r }));
+    const q = field => this.db.prepare(`SELECT ${field} AS name, COUNT(*) AS parts FROM parts WHERE ${field} != '' GROUP BY ${field} ORDER BY ${field} COLLATE NOCASE`).all().map(r => ({ ...r }));
     return { categories: q('category'), locations: q('location') };
   }
 
@@ -295,14 +409,18 @@ export class Store {
   }
 
   rowToProject(r) {
-    return r && { id: r.id, name: r.name, notes: r.notes, builds: r.builds, createdAt: r.created_at, updatedAt: r.updated_at };
+    return r && {
+      id: r.id, name: r.name, notes: r.notes, builds: r.builds, status: r.status || 'planned', archived: Boolean(r.archived),
+      createdAt: r.created_at, updatedAt: r.updated_at,
+    };
   }
 
-  createProject({ name, notes = '', builds = 1 }) {
+  createProject({ name, notes = '', builds = 1, status = 'planned' }) {
     const n = str(name, 200);
     if (!n) throw Object.assign(new Error('A project needs a name.'), { status: 400 });
     const t = now();
-    const r = this.db.prepare('INSERT INTO projects (name, notes, builds, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(n, text(notes), Math.max(1, int(builds, 1)), t, t);
+    const st = PROJECT_STATUSES.includes(status) ? status : 'planned';
+    const r = this.db.prepare('INSERT INTO projects (name, notes, builds, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(n, text(notes), Math.max(1, int(builds, 1)), st, t, t);
     return this.getProject(Number(r.lastInsertRowid));
   }
 
@@ -311,8 +429,10 @@ export class Store {
     if (!p) return null;
     const name = 'name' in patch ? str(patch.name, 200) : p.name;
     if (!name) throw Object.assign(new Error('A project needs a name.'), { status: 400 });
-    this.db.prepare('UPDATE projects SET name=?, notes=?, builds=?, updated_at=? WHERE id=?').run(
-      name, 'notes' in patch ? text(patch.notes) : p.notes, 'builds' in patch ? Math.max(1, Math.min(9999, int(patch.builds, 1))) : p.builds, now(), p.id);
+    const status = 'status' in patch && PROJECT_STATUSES.includes(patch.status) ? patch.status : p.status;
+    const archived = 'archived' in patch ? (patch.archived ? 1 : 0) : p.archived;
+    this.db.prepare('UPDATE projects SET name=?, notes=?, builds=?, status=?, archived=?, updated_at=? WHERE id=?').run(
+      name, 'notes' in patch ? text(patch.notes) : p.notes, 'builds' in patch ? Math.max(1, Math.min(9999, int(patch.builds, 1))) : p.builds, status, archived, now(), p.id);
     return this.getProject(p.id);
   }
 
@@ -338,21 +458,26 @@ export class Store {
   evaluate(project, lines, partsById) {
     const remaining = new Map();
     const out = lines.map(l => {
-      const need = l.qty * project.builds;
+      const need = roundQty(l.qty * project.builds);
       const part = l.partId ? partsById.get(l.partId) : null;
       const counted = part && (l.state === 'auto' || l.state === 'confirmed');
       let have = 0, status;
+      const level = counted ? part.stockLevel : null;
       if (l.state === 'skip') status = 'skip';
       else if (l.state === 'review') status = 'review';
       else if (!counted) status = 'missing';
-      else {
+      else if (level) {
+        // Plenty and Some cover any amount; Running low means top it up.
+        if (level === 'plenty' || level === 'some') { have = need; status = 'ok'; }
+        else status = level === 'low' ? 'short' : 'missing';
+      } else {
         if (!remaining.has(part.id)) remaining.set(part.id, part.qty);
         const left = remaining.get(part.id);
         have = Math.min(left, need);
         remaining.set(part.id, left - have);
         status = have >= need ? 'ok' : have > 0 ? 'short' : 'missing';
       }
-      return { ...l, need, have, short: status === 'skip' || status === 'review' ? 0 : need - have, status, part: part || null };
+      return { ...l, need, have, short: status === 'skip' || status === 'review' ? 0 : roundQty(need - have), status, level, part: part || null };
     });
     const count = s => out.filter(l => l.status === s).length;
     const summary = {
@@ -414,7 +539,7 @@ export class Store {
         if (!name) continue;
         const item = { name, mpn: str(r.mpn, 120), package: str(r.package, 60) };
         const m = this.matchItem(item, parts);
-        stmt.run(project.id, pos++, Math.max(1, int(r.qty, 1)), name, item.mpn, item.package, str(r.refs, 300), text(r.notes, 1000), m.partId, m.state, m.score, JSON.stringify(m.notes), t);
+        stmt.run(project.id, pos++, lineQty(r.qty), name, item.mpn, item.package, str(r.refs, 300), text(r.notes, 1000), m.partId, m.state, m.score, JSON.stringify(m.notes), t);
         added++;
       }
       this.touchProject(project.id);
@@ -458,7 +583,7 @@ export class Store {
     const l = this.getLine(lineId);
     if (!l) return null;
     const next = {
-      qty: 'qty' in patch ? Math.max(1, int(patch.qty, 1)) : l.qty,
+      qty: 'qty' in patch ? lineQty(patch.qty) : l.qty,
       name: 'name' in patch ? (str(patch.name, 200) || l.name) : l.name,
       mpn: 'mpn' in patch ? str(patch.mpn, 120) : l.mpn,
       package: 'package' in patch ? str(patch.package, 60) : l.package,
@@ -512,8 +637,8 @@ export class Store {
     const n = Math.max(1, int(count, 1));
     const use = new Map();
     for (const l of project.lines) {
-      if (!l.part || (l.state !== 'auto' && l.state !== 'confirmed')) continue;
-      use.set(l.part.id, (use.get(l.part.id) || 0) + l.qty * n);
+      if (!l.part || l.part.stockLevel || (l.state !== 'auto' && l.state !== 'confirmed')) continue;
+      use.set(l.part.id, roundQty((use.get(l.part.id) || 0) + l.qty * n));
     }
     return this.tx(() => {
       const changes = [];
@@ -553,7 +678,7 @@ export class Store {
       for (const l of project.lines) {
         if (l.status !== 'short' && l.status !== 'missing') continue;
         if (l.part && (l.state === 'auto' || l.state === 'confirmed')) {
-          this.adjustQty(l.part.id, l.short);
+          this.addStock(l.part.id, l.short);
           added++;
         } else {
           const part = this.createPart({ name: l.name, qty: l.short, mpn: l.mpn, package: l.package, category: category || guess(l.name) });
@@ -570,7 +695,7 @@ export class Store {
   exportAll() {
     return {
       app: 'particull',
-      version: 1,
+      version: 2,
       exportedAt: now(),
       settings: this.getSettings(),
       parts: this.listParts(),
@@ -588,13 +713,14 @@ export class Store {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
       for (const pr of data.projects || []) {
         const t = now();
-        const r = this.db.prepare('INSERT INTO projects (id, name, notes, builds, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
-          .run(int(pr.id), str(pr.name, 200) || 'Untitled project', text(pr.notes), Math.max(1, int(pr.builds, 1)), pr.createdAt || t, pr.updatedAt || t);
+        const r = this.db.prepare('INSERT INTO projects (id, name, notes, builds, status, archived, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+          .run(int(pr.id), str(pr.name, 200) || 'Untitled project', text(pr.notes), Math.max(1, int(pr.builds, 1)),
+            PROJECT_STATUSES.includes(pr.status) ? pr.status : 'planned', pr.archived ? 1 : 0, pr.createdAt || t, pr.updatedAt || t);
         const pid = Number(r.lastInsertRowid);
         (pr.lines || []).forEach((l, i) => {
           const partId = l.partId && known.has(l.partId) ? l.partId : null;
           const state = LINE_STATES.includes(l.state) ? (partId || l.state === 'skip' || l.state === 'none' ? l.state : 'none') : 'none';
-          lineStmt.run(pid, i, Math.max(1, int(l.qty, 1)), str(l.name, 200) || 'Unnamed', str(l.mpn, 120), str(l.package, 60), str(l.refs, 300), text(l.notes, 1000), partId, state, l.score ?? null, JSON.stringify(l.matchNotes || []), t);
+          lineStmt.run(pid, i, lineQty(l.qty), str(l.name, 200) || 'Unnamed', str(l.mpn, 120), str(l.package, 60), str(l.refs, 300), text(l.notes, 1000), partId, state, l.score ?? null, JSON.stringify(l.matchNotes || []), t);
         });
       }
       if (data.settings) this.updateSettings(data.settings);

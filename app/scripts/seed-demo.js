@@ -8,12 +8,6 @@ Microcontrollers | Raspberry Pi Pico W | 4 | Bin 1
 Microcontrollers | Teensy 4.1 | 1 | Bin 1
 Microcontrollers | Seeed XIAO ESP32-C3 | 5 | Bin 1
 Microcontrollers | ATtiny85 | 6 | Drawer C2 | | DIP-8
-Resistors | 10k resistor | 180 | Drawer A1 | | 0805
-Resistors | 4.7k resistor | 95 | Drawer A1 | | 0805
-Resistors | 1k resistor | 140 | Drawer A1 | | 0805
-Resistors | 330 ohm resistor | 60 | Drawer A1 | | 0805
-Resistors | 220 ohm resistor | 0 | Drawer A1 | | 1/4W through-hole
-Resistors | 100k resistor | 40 | Drawer A1 | | 0805
 Capacitors | 100nF ceramic capacitor | 220 | Drawer A2 | | 0805
 Capacitors | 10uF ceramic capacitor | 45 | Drawer A2 | | 0805
 Capacitors | 22pF ceramic capacitor | 30 | Drawer A2 | | 0603
@@ -46,10 +40,10 @@ Audio | 28mm 8 ohm speaker | 3 | Bin 3
 Hardware | M3 heat-set inserts | 120 | Drawer D1
 Hardware | M2.5 nylon standoffs | 48 | Drawer D1
 Hardware | 6x3mm neodymium magnets | 50 | Drawer D1
-Wire & cable | 26 AWG silicone wire | 6 | Shelf 2 | | | Spools, assorted colors
+Wire & cable | 26 AWG silicone wire | 6 | Shelf 2 | | | Assorted colors
 `.trim().split('\n').map(l => {
   const [category, name, qty, location, mpn = '', pkg = '', notes = ''] = l.split('|').map(s => s.trim());
-  return { category, name, qty: Number(qty), location, mpn, package: pkg, notes };
+  return { category, name, qty: Number(qty), location, mpn, package: pkg, notes, unit: /wire/.test(name) ? 'spool' : '' };
 });
 
 const dingr = `| Qty | Part | Part number | Package | Notes |
@@ -89,11 +83,25 @@ if (existing.parts.length) {
   console.log(`There are already ${existing.parts.length} parts here. Seed an empty instance.`);
   process.exit(1);
 }
-await call('/api/parts/bulk', { rows: parts });
-await call('/api/projects', { name: 'Teensy iPod, stage 1', notes: 'Desktop bring-up before it goes in the 5.5G shell.', bom: ipod });
-const d = await call('/api/projects', { name: 'Dingr prototype', notes: 'Appliance timer: color display, 12-LED halo, rotary encoder.', builds: 2, bom: dingr });
+await call('/api/parts/bulk', { rows: parts.filter(p => p.category !== 'Resistors') });
+// A resistor book, the way "Add a kit" makes it: every E12 value from 10Ω to 1M, plenty of each.
+const E12 = [1, 1.2, 1.5, 1.8, 2.2, 2.7, 3.3, 3.9, 4.7, 5.6, 6.8, 8.2];
+const ohms = v => (v >= 1e6 ? `${+(v / 1e6).toPrecision(3)}M` : v >= 1e3 ? `${+(v / 1e3).toPrecision(3)}k` : `${+v.toPrecision(3)}Ω`);
+const book = [10, 100, 1e3, 1e4, 1e5].flatMap(d => E12.map(b => b * d)).concat(1e6);
+await call('/api/parts/bulk', { rows: book.map(v => ({ name: `${ohms(v)} resistor`, package: '0805', category: 'Resistors', location: 'Resistor book', stockLevel: 'plenty', qty: 0 })) });
+await call('/api/parts/bulk', { rows: [
+  { name: '220Ω resistor', package: '1/4W through-hole', category: 'Resistors', location: 'Drawer A1', qty: 0 },
+  { name: 'Heat shrink tubing assortment', category: 'Wire & cable', location: 'Shelf 2', stockLevel: 'some', qty: 0 },
+  { name: 'Solder, 0.8mm leaded', category: 'Consumables', location: 'Bench', stockLevel: 'low', qty: 0 },
+  { name: 'PLA filament, black', category: 'Consumables', location: 'Shelf 3', qty: 650, unit: 'g' },
+] });
+await call('/api/projects', { name: 'Teensy iPod, stage 1', notes: 'Desktop bring-up before it goes in the 5.5G shell.', status: 'planned', bom: ipod });
+await call('/api/projects', { name: 'Patio string lights', notes: 'WLED on an ESP32, about 100 ft of addressable bulbs.', status: 'idea', bom: '- 1x ESP32-S3 dev board\n- 1x 5V 20A power supply\n- 1x 74AHCT125 level shifter\n- 1x 1000uF electrolytic capacitor\n- 1x 330 ohm resistor' });
+const old = await call('/api/projects', { name: 'Dishwasher indicator v1', notes: 'The Tasmota original.', status: 'done', bom: '- 1x ESP8266 D1 mini\n- 3x 5mm LED\n- 1x 6mm tact switch' });
+await call(`/api/projects/${old.id}`, { archived: true }, 'PUT');
+const d = await call('/api/projects', { name: 'Dingr prototype', notes: 'Appliance timer: color display, 12-LED halo, rotary encoder.', status: 'building', builds: 2, bom: dingr });
 // Leave one suggested match to review, settle the rest as a person would.
 for (const l of d.lines) {
   if (l.status === 'review' && !/LDO/.test(l.name)) await call(`/api/lines/${l.id}`, { partId: l.partId, state: 'confirmed', remember: true }, 'PUT');
 }
-console.log(`Seeded ${parts.length} parts and 2 projects at ${base}.`);
+console.log(`Seeded ${(await (await fetch(`${base}/api/parts`)).json()).parts.length} parts and 4 projects at ${base}.`);

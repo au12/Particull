@@ -7,8 +7,16 @@
   "main": "server.js",
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server.js",
-    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js",
+    "test:e2e": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 test/e2e/*.test.js",
+    "seed": "node scripts/seed-demo.js",
+    "screenshots": "node scripts/screenshots.js"
   },
-  "engines": { "node": ">=22.13" },
-  "license": "GPL-3.0"
+  "engines": {
+    "node": ">=22.13"
+  },
+  "license": "GPL-3.0",
+  "devDependencies": {
+    "puppeteer-core": "^23.11.1"
+  }
 }

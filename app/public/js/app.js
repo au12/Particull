@@ -1,5 +1,5 @@
 // Boot, sign-in, navigation.
-import { h, clear, icon, api, showError, setUnauthorizedHandler } from './lib.js';
+import { h, clear, icon, api, showError, toast, setUnauthorizedHandler, onOfflineChange } from './lib.js';
 import { state, loadParts, applyTheme } from './state.js';
 import { renderParts } from './parts.js';
 import { renderProjects, renderProject } from './projects.js';
@@ -95,7 +95,31 @@ async function start() {
   route();
 }
 
+// ---------- offline and updates ----------
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
+  const hadController = Boolean(navigator.serviceWorker.controller);
+  navigator.serviceWorker.register('/sw.js').then(reg => {
+    // Look for a new version when the app comes back to the foreground.
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+  }).catch(() => { /* works without it */ });
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloading) return;
+    toast('Particull was updated.', { action: 'Reload', timeout: 15000, onAction: () => { reloading = true; location.reload(); } });
+  });
+}
+
+let offlineBanner;
+onOfflineChange(isOffline => {
+  if (isOffline) {
+    offlineBanner ??= h('div.offline-banner', { role: 'status' }, icon('offline'), h('span', 'Offline. Showing the last saved data; changes won’t save until Particull is reachable.'));
+    document.body.prepend(offlineBanner);
+  } else offlineBanner?.remove();
+});
+
 async function boot() {
+  registerServiceWorker();
   setUnauthorizedHandler(() => loginScreen('Your session ended. Sign in again.'));
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
   window.addEventListener('hashchange', route);

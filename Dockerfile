@@ -9,7 +9,7 @@ ENV NODE_ENV=production \
     PGID=1000
 RUN apk add --no-cache tzdata
 WORKDIR /app
-COPY app/package.json app/server.js app/db.js app/export.js ./
+COPY app/package.json app/*.js ./
 COPY app/public ./public
 RUN mkdir -p /data
 EXPOSE 8080

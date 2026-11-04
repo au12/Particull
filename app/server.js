@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { Store } from './db.js';
+import { Backups, stamp } from './backup.js';
 import { parseParts } from './public/shared/parse.js';
 import { findMatches, guessCategory } from './public/shared/match.js';
 import { exportInventory, shoppingList, bomExport, BOM_FORMAT_HINT } from './export.js';
@@ -41,7 +42,22 @@ function dropPrivileges() {
 }
 dropPrivileges();
 
-const store = new Store(path.join(DATA_DIR, 'particull.db'));
+const DB_FILE = path.join(DATA_DIR, 'particull.db');
+let store = new Store(DB_FILE);
+const backups = new Backups(path.join(DATA_DIR, 'backups'), () => store);
+
+/** Swap the live database for a backup file. Takes a safety copy first. */
+function restoreDatabase(file) {
+  const counts = Backups.validate(file);
+  backups.create('pre-restore');
+  const tmp = `${DB_FILE}.restore`;
+  fs.copyFileSync(file, tmp);
+  store.close();
+  for (const f of [`${DB_FILE}-wal`, `${DB_FILE}-shm`]) { try { fs.unlinkSync(f); } catch { /* none */ } }
+  fs.renameSync(tmp, DB_FILE);
+  store = new Store(DB_FILE);
+  return counts;
+}
 
 // ---------- sessions (only when PASSWORD is set) ----------
 function sessionSecret() {
@@ -122,11 +138,11 @@ const today = () => new Date().toLocaleDateString('sv-SE'); // YYYY-MM-DD in the
 const routes = [];
 const route = (method, pattern, handler, opts = {}) => {
   const keys = [];
-  const re = new RegExp('^' + pattern.replace(/:(\w+)/g, (_, k) => { keys.push(k); return '(\\d+)'; }) + '/?$');
+  const re = new RegExp('^' + pattern.replace(/:(\w+)/g, (_, k) => { keys.push(k); return k === 'name' ? '([A-Za-z0-9._-]+)' : '(\\d+)'; }) + '/?$');
   routes.push({ method, re, keys, handler, ...opts });
 };
 
-route('GET', '/api/health', () => ({ ok: true, version: VERSION }), { open: true });
+route('GET', '/api/health', () => ({ ok: true, version: VERSION, build: BUILD }), { open: true });
 
 route('GET', '/api/session', ({ req }) => ({
   version: VERSION,
@@ -163,6 +179,10 @@ route('GET', '/api/parts', () => ({ parts: store.listParts(), groups: store.grou
 route('POST', '/api/parts', ({ body }) => store.createPart(body));
 route('POST', '/api/parts/bulk', ({ body }) => store.bulkAdd(body.rows));
 route('POST', '/api/parts/restore', ({ body }) => store.restorePart(body.part, body.lineIds));
+route('POST', '/api/parts/bulk-update', ({ body }) => ({ parts: store.bulkUpdate(body.ids, body.patch) }));
+route('POST', '/api/parts/bulk-delete', ({ body }) => ({ removed: store.bulkDelete(body.ids) }));
+route('POST', '/api/parts/restore-many', ({ body }) => ({ parts: store.restoreMany(body.removed) }));
+route('POST', '/api/parts/merge', ({ body }) => store.mergeParts(body.keepId, body.ids));
 route('POST', '/api/parts/adjust', ({ body }) => ({
   parts: (body.changes || []).map(c => store.adjustQty(c.partId, c.delta)).filter(Boolean),
 }));
@@ -179,31 +199,37 @@ route('DELETE', '/api/parts/:id', ({ params }) => {
 });
 route('POST', '/api/groups/rename', ({ body }) => ({ changed: store.renameGroup(body.field, body.from, body.to) }));
 
-// Parse pasted text and look for parts you already have (used by "Paste a list").
-route('POST', '/api/parse', ({ body }) => {
-  const { format, rows, skipped } = parseParts(body.text);
+// Look for parts you already have, for rows about to be added ("Paste a list", "Add a kit").
+function withMatches(rows) {
   const parts = store.listParts();
   const cache = new Map();
-  return {
-    format,
-    skipped,
-    rows: rows.slice(0, 2000).map(r => {
-      const [best] = findMatches(r, parts, { limit: 1, min: 0.6, cache });
-      return {
-        ...r,
-        category: r.category || guessCategory(r.name),
-        match: best ? { id: best.part.id, name: best.part.name, qty: best.part.qty, score: best.score, exact: best.exact, notes: best.notes } : null,
-      };
-    }),
-  };
+  return rows.slice(0, 2000).map(r => {
+    const [best] = findMatches(r, parts, { limit: 1, min: 0.6, cache });
+    return {
+      ...r,
+      category: r.category || guessCategory(r.name),
+      match: best ? {
+        id: best.part.id, name: best.part.name, qty: best.part.qty, stockLevel: best.part.stockLevel, unit: best.part.unit,
+        score: best.score, exact: best.exact, notes: best.notes,
+      } : null,
+    };
+  });
+}
+route('POST', '/api/parse', ({ body }) => {
+  const { format, rows, skipped } = parseParts(body.text);
+  return { format, skipped, rows: withMatches(rows) };
 });
+route('POST', '/api/match-rows', ({ body }) => ({ rows: withMatches(Array.isArray(body.rows) ? body.rows : []) }));
 
 // Check a name while typing in "Add part".
 route('POST', '/api/similar', ({ body }) => {
   const found = findMatches({ name: body.name, mpn: body.mpn, package: body.package }, store.listParts(), { limit: 3, min: 0.6 });
   return {
     category: guessCategory(body.name),
-    matches: found.filter(f => f.part.id !== body.exclude).map(f => ({ id: f.part.id, name: f.part.name, qty: f.part.qty, location: f.part.location, score: f.score, exact: f.exact, notes: f.notes })),
+    matches: found.filter(f => f.part.id !== body.exclude).map(f => ({
+      id: f.part.id, name: f.part.name, qty: f.part.qty, stockLevel: f.part.stockLevel, unit: f.part.unit, location: f.part.location,
+      score: f.score, exact: f.exact, notes: f.notes,
+    })),
   };
 });
 
@@ -273,6 +299,7 @@ route('GET', '/api/export/inventory', ({ query }) => {
     locations: flag('locations', s.exportIncludeLocations),
     notes: flag('notes', s.exportIncludeNotes),
     empty: flag('empty', s.exportIncludeEmpty),
+    compact: format === 'md' && flag('compact', s.exportCompact),
     cost: s.costTracking && flag('cost', false),
     currency: s.currency,
   });
@@ -297,13 +324,66 @@ route('GET', '/api/backup', () => ({
   type: 'application/json; charset=utf-8',
   headers: download(`particull-backup-${today()}.json`, 'application/json; charset=utf-8'),
 }));
-route('POST', '/api/restore', ({ body }) => store.importAll(body), { limit: 100 * 1024 * 1024 });
+route('POST', '/api/restore', ({ body }) => {
+  if (!body || body.app !== 'particull') throw new HttpError(400, 'This file is not a Particull backup.');
+  backups.create('pre-restore');
+  return store.importAll(body);
+}, { limit: 100 * 1024 * 1024 });
+
+// Database snapshots
+route('GET', '/api/backups', () => ({ backups: backups.list(), next: backups.next(), lastError: backups.lastError }));
+route('POST', '/api/backups', () => ({ backup: backups.create('manual'), backups: backups.list() }));
+route('GET', '/api/backups/:name', ({ params }) => ({
+  raw: fs.readFileSync(backups.pathFor(params.name)),
+  type: 'application/vnd.sqlite3',
+  headers: download(params.name, 'application/vnd.sqlite3'),
+}));
+route('DELETE', '/api/backups/:name', ({ params }) => { backups.delete(params.name); return { backups: backups.list() }; });
+route('POST', '/api/backups/:name/restore', ({ params }) => {
+  const counts = restoreDatabase(backups.pathFor(params.name));
+  return { ...counts, backups: backups.list() };
+});
+// Restore from a .db file you upload (base64 in JSON keeps the server free of multipart parsing).
+route('POST', '/api/backups/upload', ({ body }) => {
+  const data = Buffer.from(String(body.data || ''), 'base64');
+  if (data.length < 512 || data.subarray(0, 15).toString('latin1') !== 'SQLite format 3') throw new HttpError(400, 'That file is not a Particull database.');
+  backups.ensureDir();
+  const file = path.join(backups.dir, `particull-upload-${Date.now()}.tmp`);
+  fs.writeFileSync(file, data);
+  try {
+    Backups.validate(file);
+    const kept = path.join(backups.dir, `particull-${stamp()}-upload.db`);
+    fs.renameSync(file, kept);
+    const counts = restoreDatabase(kept);
+    return { ...counts, backups: backups.list() };
+  } finally {
+    try { fs.unlinkSync(file); } catch { /* moved */ }
+  }
+}, { limit: 150 * 1024 * 1024 });
 
 function notFound(what) {
   throw new HttpError(404, `That ${what} doesn't exist anymore.`);
 }
 
 // ---------- static files ----------
+// A hash of everything in public/ names this build: it busts browser caches and tells the
+// service worker when to fetch a fresh copy of the app.
+function listPublic(dir = PUBLIC) {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap(e => {
+    const full = path.join(dir, e.name);
+    return e.isDirectory() ? listPublic(full) : [full];
+  });
+}
+const PUBLIC_FILES = listPublic().filter(f => !/\.(txt|md)$/.test(f)).sort();
+const BUILD = (() => {
+  const hash = crypto.createHash('sha1').update(VERSION);
+  for (const f of PUBLIC_FILES) hash.update(f).update(fs.readFileSync(f));
+  return hash.digest('hex').slice(0, 10);
+})();
+const SHELL_ASSETS = ['/', `/css/app.css?v=${BUILD}`, `/js/app.js?v=${BUILD}`, ...PUBLIC_FILES
+  .map(f => `/${path.relative(PUBLIC, f).split(path.sep).join('/')}`)
+  .filter(u => u !== '/index.html' && u !== '/sw.js' && u !== '/css/app.css' && u !== '/js/app.js' && !/^\/icons\/(icon-512|icon-maskable|apple-touch)/.test(u))];
+
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2',
@@ -320,7 +400,12 @@ function serveStatic(req, res, pathname) {
   if (!entry) {
     let data;
     try { data = fs.readFileSync(file); } catch { return send(req, res, 404, 'Not found', 'text/plain'); }
-    if (file.endsWith('index.html') || file.endsWith('sw.js')) data = Buffer.from(data.toString('utf8').replaceAll('{{VERSION}}', VERSION));
+    if (file.endsWith('index.html') || file.endsWith('sw.js')) {
+      data = Buffer.from(data.toString('utf8')
+        .replaceAll('{{VERSION}}', VERSION)
+        .replaceAll('{{BUILD}}', BUILD)
+        .replaceAll('{{ASSETS}}', JSON.stringify(SHELL_ASSETS)));
+    }
     const type = TYPES[path.extname(file)] || 'application/octet-stream';
     const gz = /^(text|application\/(json|manifest)|image\/svg)/.test(type) ? zlib.gzipSync(data) : null;
     entry = { data, gz, type, etag: `"${crypto.createHash('sha1').update(data).digest('base64url').slice(0, 16)}"` };
@@ -379,10 +464,11 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+backups.start();
 server.listen(PORT, HOST, () => {
   console.log(`Particull ${VERSION} listening on http://${HOST}:${PORT} (data in ${DATA_DIR}${PASSWORD ? ', password on' : ''})`);
 });
 
-const shutdown = () => { server.close(); try { store.close(); } catch { /* already closed */ } process.exit(0); };
+const shutdown = () => { backups.stop(); server.close(); try { store.close(); } catch { /* already closed */ } process.exit(0); };
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);

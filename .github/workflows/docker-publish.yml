@@ -25,6 +25,67 @@ jobs:
       - run: npm test
         working-directory: app
 
+  # The main flows in a real browser: adding parts, kits, BOM review, builds, backups, offline.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+        working-directory: app
+      - run: npm run test:e2e
+        working-directory: app
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+
+  # Build the image and run it the way Unraid does before anything is published.
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: particull:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Start it as Unraid would (nobody:users, /data mapped)
+        run: |
+          mkdir -p "$RUNNER_TEMP/data"
+          docker run -d --name particull -p 8080:8080 \
+            -e PUID=99 -e PGID=100 -e TZ=America/New_York \
+            -v "$RUNNER_TEMP/data:/data" particull:smoke
+          for i in $(seq 1 30); do curl -fsS http://localhost:8080/api/health && break; sleep 1; done
+      - name: Check the app, the API and file ownership
+        run: |
+          set -e
+          curl -fsS http://localhost:8080/api/health | grep -q '"ok":true'
+          curl -fsS http://localhost:8080/ | grep -q 'app.js?v='
+          curl -fsS http://localhost:8080/sw.js | grep -q 'const BUILD'
+          curl -fsS http://localhost:8080/js/parts.js > /dev/null
+          curl -fsS -X POST -H 'Content-Type: application/json' -d '{"name":"Smoke test resistor","qty":3}' http://localhost:8080/api/parts | grep -q 'Smoke test resistor'
+          curl -fsS -X POST -H 'Content-Type: application/json' -d '{}' http://localhost:8080/api/backups | grep -q '"kind":"manual"'
+          test "$(stat -c '%u:%g' "$RUNNER_TEMP/data/particull.db")" = "99:100"
+          test "$(stat -c '%u:%g' "$RUNNER_TEMP/data/backups")" = "99:100"
+      - name: Data survives a restart
+        run: |
+          docker restart particull
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/api/parts | grep -q 'Smoke test resistor'; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: Container log
+        if: always()
+        run: docker logs particull
+
   version:
     runs-on: ubuntu-latest
     outputs:
@@ -45,7 +106,7 @@ jobs:
           fi
 
   image:
-    needs: [test, version]
+    needs: [test, e2e, smoke, version]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:

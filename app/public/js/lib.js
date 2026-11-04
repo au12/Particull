@@ -72,6 +72,17 @@ const P = {
   lock: '<rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/>',
   warn: '<path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4.5M12 17.2v.3"/>',
   file: '<path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-10z"/><path d="M14 3.5v5h5"/>',
+  select: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><path d="m5.5 7 1.3 1.3L9 6"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><path d="M14 6h6.5M14 17h6.5"/>',
+  layers: '<path d="m12 3.5 8.5 4.5-8.5 4.5L3.5 8z"/><path d="m3.5 12 8.5 4.5 8.5-4.5M3.5 16l8.5 4.5 8.5-4.5"/>',
+  kit: '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M3.5 10h17M9 5v14M15 5v14"/>',
+  merge: '<path d="M6 4v4a6 6 0 0 0 6 6h0a6 6 0 0 1 6 6M18 4v4a6 6 0 0 1-3 5.2"/><path d="m3.5 6.5 2.5-2.5 2.5 2.5M15.5 6.5 18 4l2.5 2.5"/>',
+  tag: '<path d="M3.5 12.5V4.5a1 1 0 0 1 1-1h8l8 8a1.5 1.5 0 0 1 0 2.1l-6.9 6.9a1.5 1.5 0 0 1-2.1 0z"/><circle cx="8" cy="8" r="1.4"/>',
+  pin: '<path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/>',
+  gauge: '<path d="M4 17a8 8 0 1 1 16 0"/><path d="m12 17 4-5.5"/><path d="M4 17h16"/>',
+  archive: '<rect x="3.5" y="4" width="17" height="4.5" rx="1"/><path d="M5 8.5v10a1.5 1.5 0 0 0 1.5 1.5h11a1.5 1.5 0 0 0 1.5-1.5v-10M10 12.5h4"/>',
+  database: '<ellipse cx="12" cy="6" rx="7.5" ry="2.8"/><path d="M4.5 6v12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8V6M4.5 12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8"/>',
+  offline: '<path d="M3 3l18 18M8.5 16.5a5 5 0 0 1 7 0M5 12.6a10 10 0 0 1 4.2-2.4M14.8 10.2A10 10 0 0 1 19 12.6M2 9a15 15 0 0 1 4.4-2.8M11 5.5A15 15 0 0 1 22 9"/><circle cx="12" cy="20" r="0.6"/>',
+  ruler: '<rect x="2.5" y="8" width="19" height="8" rx="1.5"/><path d="M6.5 8v3M10 8v4M13.5 8v3M17 8v4"/>',
 };
 
 export function icon(name, cls = '') {
@@ -91,6 +102,16 @@ export class ApiError extends Error {
 let onUnauthorized = () => {};
 export const setUnauthorizedHandler = fn => { onUnauthorized = fn; };
 
+// Whether the last answer came from the service worker's saved copy instead of the server.
+let offline = false;
+const offlineListeners = new Set();
+export const onOfflineChange = fn => offlineListeners.add(fn);
+function setOffline(v) {
+  if (v === offline) return;
+  offline = v;
+  for (const fn of offlineListeners) fn(v);
+}
+
 export async function api(path, { method = 'GET', body, raw = false } = {}) {
   let res;
   try {
@@ -101,8 +122,10 @@ export async function api(path, { method = 'GET', body, raw = false } = {}) {
       credentials: 'same-origin',
     });
   } catch {
+    setOffline(true);
     throw new ApiError(0, "Can't reach Particull. Check that the container is running.");
   }
+  setOffline(res.headers.get('X-Particull-Offline') === '1');
   if (res.status === 401 && !path.startsWith('/login')) {
     onUnauthorized();
     throw new ApiError(401, 'Sign in to continue.');
@@ -312,20 +335,22 @@ export function money(n, currency = '$') {
   return `${currency}${n < 1 && n > 0 ? n.toFixed(3).replace(/0$/, '') : n.toFixed(2)}`;
 }
 
-/** Quantity stepper: [−] [ n ] [+]. Calls onChange(delta) or onSet(value). */
+const fmtNum = n => String(Math.round(Number(n) * 1000) / 1000);
+
+/** Quantity stepper: [−] [ n ] [+]. Calls onDelta(delta) or onSet(value). */
 export function stepper({ value, onDelta, onSet, label = 'Quantity', size = '' }) {
   const out = h('input.stepper-value', {
-    type: 'text', inputmode: 'numeric', pattern: '[0-9]*', value: String(value), 'aria-label': label, autocomplete: 'off',
+    type: 'text', inputmode: 'decimal', value: fmtNum(value), 'aria-label': label, autocomplete: 'off',
     onfocus: e => e.target.select(),
     onkeydown: e => {
       if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
-      if (e.key === 'Escape') { e.target.value = String(value); e.target.blur(); }
+      if (e.key === 'Escape') { e.target.value = fmtNum(value); e.target.blur(); }
       if (e.key === 'ArrowUp') { e.preventDefault(); onDelta(1); }
       if (e.key === 'ArrowDown') { e.preventDefault(); onDelta(-1); }
     },
     onchange: e => {
-      const n = parseInt(e.target.value.replace(/[^\d]/g, ''), 10);
-      if (Number.isFinite(n) && n !== value) onSet(n); else e.target.value = String(value);
+      const n = Math.round(parseFloat(e.target.value.replace(/,/g, '.').replace(/[^\d.]/g, '')) * 1000) / 1000;
+      if (Number.isFinite(n) && n !== value) onSet(n); else e.target.value = fmtNum(value);
     },
   });
   const btn = (d, ic, name) => h('button.stepper-btn', {
@@ -333,6 +358,6 @@ export function stepper({ value, onDelta, onSet, label = 'Quantity', size = '' }
     onclick: e => { e.stopPropagation(); onDelta(d); },
   }, icon(ic));
   const el = h(`div.stepper${size ? `.stepper-${size}` : ''}`, { onclick: e => e.stopPropagation() }, btn(-1, 'minus', 'Remove'), out, btn(1, 'plus', 'Add'));
-  el.update = v => { value = v; if (document.activeElement !== out) out.value = String(v); };
+  el.update = v => { value = v; if (document.activeElement !== out) out.value = fmtNum(v); };
   return el;
 }

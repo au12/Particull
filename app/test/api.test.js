@@ -43,7 +43,10 @@ test('password protects the API', async () => {
 
 test('serves the app shell with a version for cache busting', async () => {
   const r = await call('/');
-  assert.match(r.text, /app\.js\?v=\d+\.\d+\.\d+/);
+  assert.match(r.text, /app\.js\?v=[0-9a-f]{10}/);
+  const sw = await call('/sw.js');
+  assert.match(sw.text, /const BUILD = '[0-9a-f]{10}'/);
+  assert.match(sw.text, /\/js\/lib\.js/);
   assert.match(r.headers.get('content-security-policy'), /default-src 'self'/);
 });
 

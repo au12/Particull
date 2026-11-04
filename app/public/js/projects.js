@@ -1,7 +1,23 @@
 // Projects list, a project's BOM checked against inventory, and everything you do from there.
 import { h, clear, icon, api, toast, showError, sheet, confirmSheet, menu, plural, copyText, downloadUrl, isTouch, readFile, money, stepper } from './lib.js';
 import { state, loadParts, costOn } from './state.js';
-import { openPartEditor } from './parts.js';
+import { openPartEditor } from './editor.js';
+import { formatNumber, formatStock, unitLabel, LEVEL_LABELS } from '../shared/stock.js';
+
+// Where a project is. Archived is separate: any project can be put away.
+const PROJECT_STATUS = {
+  building: { label: 'Building', order: 0 },
+  planned: { label: 'Planned', order: 1 },
+  idea: { label: 'Idea', order: 2 },
+  done: { label: 'Done', order: 3 },
+};
+const statusPill = st => h(`span.status-pill.status-${st}`, PROJECT_STATUS[st]?.label || st);
+
+/** "4", "2.5 m", "6 spools" for an amount of a line's matched part. */
+function amt(n, part) {
+  const u = part ? unitLabel(part.unit, n) : '';
+  return u ? `${formatNumber(n)} ${u}` : formatNumber(n);
+}
 
 const STATUS = {
   ok: { label: 'In stock', short: 'In stock' },
@@ -55,14 +71,29 @@ export async function renderProjects(root) {
       h('div.empty-actions', h('button.btn.btn-primary', { type: 'button', onclick: openNewProject }, icon('plus'), 'New project'))));
     return;
   }
-  clear(list, projects.map(p => h('a.project-row', { href: `#/projects/${p.id}` },
+  const row = p => h(`a.project-row${p.archived ? '.is-archived' : ''}`, { href: `#/projects/${p.id}` },
     h('div.project-main',
-      h('h2.project-name', p.name),
-      statusLine(p.summary),
-      bar(p.summary)),
+      h('div.project-name-row', h('h2.project-name', p.name), p.archived && statusPill(p.status)),
+      p.status !== 'done' && !p.archived ? [statusLine(p.summary), bar(p.summary)] : h('span.status-text', plural(p.summary.lines, 'line'))),
     h('div.project-side',
       p.builds > 1 && h('span.builds-badge', `×${p.builds}`),
-      icon('chevron', 'chev')))));
+      icon('chevron', 'chev')));
+  const active = projects.filter(p => !p.archived);
+  const archived = projects.filter(p => p.archived);
+  const groups = Object.keys(PROJECT_STATUS).map(st => [st, active.filter(p => p.status === st)]).filter(([, ps]) => ps.length);
+  const archivedBox = h('div.project-list', { hidden: true }, archived.map(row));
+  clear(list,
+    groups.length === 0 && h('p.page-sub', 'All your projects are archived.'),
+    groups.map(([st, ps]) => h('section.project-group',
+      h('h2.group-head', h('span', PROJECT_STATUS[st].label), h('span.group-count', ps.length)),
+      h('div.project-list', ps.map(row)))),
+    archived.length > 0 && h('section.project-group.archived-group',
+      h('button.btn.btn-quiet.archived-toggle', { type: 'button', 'aria-expanded': 'false', onclick: e => {
+        archivedBox.hidden = !archivedBox.hidden;
+        e.currentTarget.setAttribute('aria-expanded', String(!archivedBox.hidden));
+        e.currentTarget.querySelector('span').textContent = archivedBox.hidden ? `Show ${plural(archived.length, 'archived project')}` : 'Hide archived projects';
+      } }, icon('archive'), h('span', `Show ${plural(archived.length, 'archived project')}`)),
+      archivedBox));
 }
 
 // ---------- new project ----------
@@ -91,9 +122,16 @@ export function openNewProject() {
   let builds = 1;
   const buildStep = stepper({ value: 1, label: 'How many to build', onDelta: d => { builds = Math.max(1, builds + d); buildStep.update(builds); }, onSet: v => { builds = Math.max(1, v); buildStep.update(builds); } });
   const { ta, tools } = bomInput();
+  let status = 'planned';
+  const statusSeg = h('div.segmented', { role: 'radiogroup', 'aria-label': 'Status' },
+    ['idea', 'planned', 'building'].map(k => h('button.seg', {
+      type: 'button', role: 'radio', 'aria-checked': String(status === k), dataset: { k },
+      onclick: () => { status = k; [...statusSeg.children].forEach(b => b.setAttribute('aria-checked', String(b.dataset.k === k))); },
+    }, PROJECT_STATUS[k].label)));
   const form = h('form', { onsubmit: e => { e.preventDefault(); create(); } },
-    h('div.form-row',
-      h('label.field.form-row-grow', h('span.field-label', 'Name'), name),
+    h('label.field', h('span.field-label', 'Name'), name),
+    h('div.form-row.new-project-row',
+      h('div.field', h('span.field-label', 'Status'), statusSeg),
       h('div.field', h('span.field-label', 'How many to build'), buildStep)),
     h('div.field', h('span.field-label', 'Bill of materials', h('span.optional', 'optional, you can add it later')), ta, tools));
   s.body.append(form);
@@ -103,7 +141,7 @@ export function openNewProject() {
     if (!name.value.trim()) { name.focus(); toast('Give the project a name.'); return; }
     btn.disabled = true;
     try {
-      const p = await api('/projects', { method: 'POST', body: { name: name.value.trim(), builds, bom: ta.value.trim() || undefined } });
+      const p = await api('/projects', { method: 'POST', body: { name: name.value.trim(), builds, status, bom: ta.value.trim() || undefined } });
       s.close();
       location.hash = `#/projects/${p.id}`;
       if (p.lines.length) toast(importSummary(p.lines.length, p.summary));
@@ -166,8 +204,15 @@ export function renderProject(root, id) {
       onSet: v => act(() => api(`/projects/${p.id}`, { method: 'PUT', body: { builds: Math.max(1, v) } })),
     });
 
+    const setStatus = st => act(() => api(`/projects/${p.id}`, { method: 'PUT', body: { status: st } }));
+    const statusBtn = h(`button.status-pill.status-${p.status}.status-btn`, { type: 'button', 'aria-label': `Status: ${PROJECT_STATUS[p.status].label}. Change`, onclick: e => menu(e.currentTarget,
+      Object.entries(PROJECT_STATUS).map(([k, v]) => ({ label: v.label, icon: p.status === k ? 'check' : null, action: () => setStatus(k) }))) },
+    PROJECT_STATUS[p.status].label, icon('down'));
     const moreBtn = h('button.icon-btn', { type: 'button', 'aria-label': 'More project actions', onclick: e => menu(e.currentTarget, [
       { label: 'Rename or edit notes', icon: 'edit', action: () => editProject(p) },
+      p.archived
+        ? { label: 'Unarchive', icon: 'archive', action: () => act(() => api(`/projects/${p.id}`, { method: 'PUT', body: { archived: false } }), 'Project unarchived.') }
+        : { label: 'Archive', icon: 'archive', action: () => act(() => api(`/projects/${p.id}`, { method: 'PUT', body: { archived: true } }), 'Project archived. It’s at the bottom of the projects list.') },
       { label: 'Add a line', icon: 'plus', action: () => editLine(null) },
       { label: 'Check matches again', icon: 'refresh', action: () => act(() => api(`/projects/${p.id}/rematch`, { method: 'POST', body: {} }), r => (r.changed ? `${plural(r.changed, 'line')} changed.` : 'No new matches found.')) },
       '-',
@@ -193,7 +238,7 @@ export function renderProject(root, id) {
     clear(body,
       h('header.page-head.project-head',
         h('div.project-title',
-          h('h1', p.name),
+          h('div.project-title-row', h('h1', p.name), statusBtn, p.archived && h('span.status-pill.status-archived', 'Archived')),
           p.notes ? h('p.page-sub.project-notes', p.notes) : null),
         h('div.page-actions',
           h('button.btn.btn-quiet.hide-sm', { type: 'button', onclick: () => openImport(p) }, icon('upload'), 'Import BOM'),
@@ -270,11 +315,14 @@ export function renderProject(root, id) {
       { label: 'Delete line', icon: 'trash', danger: true, action: () => act(() => api(`/lines/${l.id}`, { method: 'DELETE' }), 'Line deleted.') },
     ]);
 
-    const qtyText = p.builds > 1 ? h('span.line-qty', { title: `${l.qty} per build` }, `${l.need}`) : h('span.line-qty', `${l.qty}`);
+    const qtyText = p.builds > 1 ? h('span.line-qty', { title: `${formatNumber(l.qty)} per build` }, formatNumber(l.need)) : h('span.line-qty', formatNumber(l.qty));
+    const pillText = l.level === 'low' ? 'Top up'
+      : l.status === 'short' || (l.status === 'missing' && l.part) ? `Buy ${amt(l.short, l.part)}`
+        : STATUS[l.status].short;
     const head = h('div.line-head',
       qtyText,
       h('div.line-title', h('span.line-name', l.name), meta.length > 0 && h('div.part-meta', meta)),
-      h('span.pill', { class: `pill-${l.status}` }, l.status === 'short' ? `Buy ${l.short}` : l.status === 'missing' && l.part ? `Buy ${l.short}` : STATUS[l.status].short),
+      h('span.pill', { class: `pill-${l.status}` }, pillText),
       h('button.icon-btn.icon-btn-sm', { type: 'button', 'aria-label': `More for ${l.name}`, onclick: lineMenu }, icon('more')));
 
     let detail = null;
@@ -284,7 +332,7 @@ export function renderProject(root, id) {
         h('div.review-match',
           h('span.review-q', `${confidence(l.score ?? 0)} the same as`),
           h('span.review-part', l.part.name, l.part.package && !l.part.name.includes(l.part.package) ? h('span.meta-pkg', l.part.package) : null),
-          h('span.review-stock', `${l.part.qty} on hand`, l.part.location ? h('span.tape', l.part.location) : null),
+          h('span.review-stock', l.part.stockLevel ? formatStock(l.part) : `${amt(l.part.qty, l.part)} on hand`, l.part.location ? h('span.tape', l.part.location) : null),
           notes.length > 0 && h('span.review-warn', icon('warn'), notes.join(', ').replace(/^./, c => c.toUpperCase()))),
         h('div.review-buttons',
           h('button.btn.btn-sm.btn-primary', { type: 'button', onclick: () => updateLine(l, { partId: l.part.id, state: 'confirmed', remember: projectView.remember }) }, icon('check'), 'Same part'),
@@ -293,7 +341,8 @@ export function renderProject(root, id) {
     } else if (l.status === 'ok' || l.status === 'short' || (l.status === 'missing' && l.part)) {
       detail = h('div.detail.detail-stock',
         h('span.stock-part', l.state === 'auto' ? icon('check') : icon('link'), l.part.name),
-        h('span.stock-qty', l.status === 'ok' ? `${l.part.qty} on hand` : `have ${l.have} of ${l.need}`),
+        h('span.stock-qty', l.level ? LEVEL_LABELS[l.level]
+          : l.status === 'ok' ? `${amt(l.part.qty, l.part)} on hand` : `have ${amt(l.have, l.part)} of ${amt(l.need, l.part)}`),
         l.part.location && h('span.tape', l.part.location));
     } else if (l.status === 'missing') {
       detail = h('div.detail.detail-missing',
@@ -466,19 +515,21 @@ export function renderProject(root, id) {
     function draw2() {
       const use = new Map();
       for (const l of p.lines) {
-        if (!l.part || (l.state !== 'auto' && l.state !== 'confirmed')) continue;
+        if (!l.part || l.part.stockLevel || (l.state !== 'auto' && l.state !== 'confirmed')) continue;
         const u = use.get(l.part.id) || { part: l.part, n: 0 };
         u.n += l.qty * count;
         use.set(l.part.id, u);
       }
       const unmatched = p.lines.filter(l => l.status === 'review' || (!l.part && l.status !== 'skip')).length;
+      const levelled = p.lines.filter(l => l.part?.stockLevel && (l.state === 'auto' || l.state === 'confirmed')).length;
       clear(preview,
         unmatched > 0 && h('p.notice', icon('warn'), `${plural(unmatched, 'line')} ${unmatched === 1 ? 'isn’t' : 'aren’t'} matched to a part and won’t be counted.`),
+        levelled > 0 && h('p.field-hint.build-hint', `${plural(levelled, 'part')} tracked as Plenty or Some ${levelled === 1 ? 'stays' : 'stay'} as ${levelled === 1 ? 'it is' : 'they are'}.`),
         h('div.build-list', [...use.values()].map(({ part, n }) => {
           const take = Math.min(part.qty, n);
           return h('div.build-item',
             h('span.build-name', part.name),
-            h('span.build-change', take < n ? h('span.meta-warn', `only ${part.qty}`) : null, ` ${part.qty} → ${part.qty - take}`));
+            h('span.build-change', take < n ? h('span.meta-warn', `only ${amt(part.qty, part)}`) : null, ` ${formatNumber(part.qty)} → ${amt(Math.round((part.qty - take) * 1000) / 1000, part)}`));
         })));
       go.disabled = use.size === 0;
     }
@@ -487,6 +538,7 @@ export function renderProject(root, id) {
       if (!r) return;
       s.close();
       loadParts();
+      if (p.status === 'idea' || p.status === 'planned') act(() => api(`/projects/${p.id}`, { method: 'PUT', body: { status: 'building' } }));
       toast(`Took parts for ${plural(count, 'build')} out of inventory.`, { action: 'Undo', timeout: 10000, onAction: () => undoBuild(r.build.id) });
     } }, icon('build'), 'Take parts out');
     s.footer.append(h('span'), h('div.footer-right', h('button.btn', { type: 'button', onclick: () => s.close() }, 'Cancel'), go));
