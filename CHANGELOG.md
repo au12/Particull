@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.2.0 (2026-11-03)
 
 ### Parts
 - Plenty / Some / Running low / Out as an alternative to exact counts; BOM checks treat Plenty and Some as in stock and list Running low to top up
