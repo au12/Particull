@@ -65,6 +65,7 @@ const P = {
   back: '<path d="M15 5.5 8.5 12l6.5 6.5"/>',
   chevron: '<path d="m9 5.5 6.5 6.5L9 18.5"/>',
   down: '<path d="m6 9.5 6 6 6-6"/>',
+  updown: '<path d="m8 9.5 4-4 4 4M8 14.5l4 4 4-4"/>',
   refresh: '<path d="M19.5 8A8 8 0 0 0 5 7.4M4.5 16a8 8 0 0 0 14.5.6"/><path d="M19.5 3.5V8H15M4.5 20.5V16H9"/>',
   sort: '<path d="M7 4v16m0 0-3-3m3 3 3-3M17 20V4m0 0-3 3m3-3 3 3"/>',
   edit: '<path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',

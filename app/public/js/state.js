@@ -76,7 +76,7 @@ export function applyTheme() {
   const t = state.settings.theme || 'system';
   document.documentElement.dataset.theme = t;
   const dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#14191b' : '#f2f4f3');
+  for (const m of document.querySelectorAll('meta[name="theme-color"]')) m.setAttribute('content', dark ? '#0f0f11' : '#f2f2f5');
 }
 
 export const costOn = () => Boolean(state.settings.costTracking);

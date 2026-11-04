@@ -19,6 +19,11 @@
 - Scheduled database backups (every 6 hours, daily or weekly) with a keep limit, back up now, restore from any backup or a .db file, and a safety copy before every restore
 - Service worker: opens instantly from a saved copy and shows the last data when the server can't be reached
 
+### Look and feel
+- Redesigned in the spirit of classic Apple tools: system font (San Francisco on Apple devices, Inter elsewhere), inset grouped lists with hairline separators, filled buttons and fields, UIStepper-style quantity controls, green switches, translucent sidebar, menus and toasts
+- On phones, page actions sit in a translucent top bar and the large title tucks into it as you scroll; the search bar stays pinned
+- Settings laid out as grouped sections, like the Settings app
+
 ### Under the hood
 - Browser tests for the main flows and a container smoke test run in CI before the image is published
 - Transactions nest safely (fixes undo after deleting several parts)

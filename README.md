@@ -34,7 +34,7 @@ It is a ground-up rebuild of [Binner](https://github.com/replaysMike/Binner), cu
 - **Automatic backups.** Daily by default, or every 6 hours or weekly, keeping as many as you choose. Every restore saves a copy first, so a bad restore can be undone.
 - **Opens instantly, works on bad Wi-Fi.** Installed to your home screen, it opens from a saved copy and shows the last data it saw when the server can't be reached.
 - **Cost tracking is off by default.** Turn it on in Settings to get a unit cost per part, an inventory total and project cost estimates. Off, prices are nowhere in the interface.
-- Works well on a phone: bottom navigation, bottom sheets, large steppers. Light and dark themes.
+- Designed like a native Apple app: system type, inset grouped lists, translucent bars and menus, a title that tucks into the bar as you scroll on a phone, bottom sheets, and light and dark themes.
 
 ![A project on desktop, dark theme](docs/screenshots/desktop-project-dark.png)
 
@@ -160,4 +160,4 @@ Every push to `master` publishes `ghcr.io/au12/particull:latest`. To cut a relea
 
 ## License
 
-GPL-3.0, the same as Binner, which this project started from. Fonts are Atkinson Hyperlegible Next and Atkinson Hyperlegible Mono by the Braille Institute, under the SIL Open Font License (`app/public/fonts/OFL.txt`).
+GPL-3.0, the same as Binner, which this project started from. The interface uses your device's system font (San Francisco on Apple devices, Segoe UI on Windows) and falls back to Inter by Rasmus Andersson elsewhere, under the SIL Open Font License (`app/public/fonts/OFL.txt`).

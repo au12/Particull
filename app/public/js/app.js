@@ -31,8 +31,33 @@ function shell() {
         h('nav.rail-nav', { 'aria-label': 'Main' }, NAV.map(n => h('a.nav-link', { href: n.href, dataset: { key: n.key } }, icon(n.icon), h('span', n.label)))),
         h('div.rail-sub', { id: 'rail-sub' })),
       main),
-    h('nav.tabbar', { 'aria-label': 'Main' }, NAV.map(n => h('a.tab-link', { href: n.href, dataset: { key: n.key } }, icon(n.icon), h('span', n.label)))));
+    h('nav.tabbar', { 'aria-label': 'Main' }, NAV.map(n => h('a.tab-link', { href: n.href, dataset: { key: n.key } }, icon(n.icon), h('span', n.label)))),
+    h('div.topbar', { 'aria-hidden': 'true' }, h('span.topbar-title')));
 }
+
+// On phones the title shrinks into the bar at the top once the large title scrolls away.
+let titleObserver;
+let watched = null;
+function watchTitle() {
+  titleObserver?.disconnect();
+  const bar = document.querySelector('.topbar-title');
+  const big = main.querySelector('.page-head h1');
+  watched = big;
+  if (!bar) return;
+  bar.textContent = big?.textContent || '';
+  document.body.classList.remove('title-hidden');
+  if (!big) return;
+  titleObserver = new IntersectionObserver(([e]) => {
+    document.body.classList.toggle('title-hidden', !e.isIntersecting && e.boundingClientRect.top < 60);
+  }, { rootMargin: '-52px 0px 0px 0px' });
+  titleObserver.observe(big);
+}
+new MutationObserver(() => {
+  const big = main?.querySelector('.page-head h1');
+  const bar = document.querySelector('.topbar-title');
+  if (bar && big && (big !== watched || bar.textContent !== big.textContent)) watchTitle();
+}).observe(document.getElementById('app'), { childList: true, subtree: true });
+window.addEventListener('scroll', () => document.body.classList.toggle('scrolled', window.scrollY > 2), { passive: true });
 
 function route() {
   const hash = location.hash.replace(/^#\/?/, '') || 'parts';
@@ -53,6 +78,7 @@ function route() {
   else if (key === 'projects' && id) { cleanup = renderProject(main, Number(id)); document.title = 'Project · Particull'; }
   else if (key === 'projects') renderProjects(main);
   else cleanup = renderSettings(main);
+  watchTitle();
 }
 
 function loginScreen(message = '') {

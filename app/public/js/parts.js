@@ -108,7 +108,7 @@ function amountEl(p) {
     return h(`button.level-pill.level-${p.stockLevel}`, {
       type: 'button', 'aria-label': `${p.name}: ${LEVEL_LABELS[p.stockLevel]}. Change`,
       onclick: e => { e.stopPropagation(); levelMenu(e.currentTarget, state.byId.get(p.id)); },
-    }, LEVEL_SHORT[p.stockLevel], icon('down'));
+    }, h('span.level-dot'), LEVEL_SHORT[p.stockLevel], icon('updown'));
   }
   const st = stepper({
     value: p.qty,
@@ -219,7 +219,7 @@ export function renderParts(root) {
 
   const headActions = h('div.page-actions',
     h('button.btn.btn-quiet.hide-sm', { type: 'button', onclick: openExport }, icon('chat'), 'Export for chat'),
-    h('button.btn.btn-quiet.hide-sm', { type: 'button', onclick: e => addSeveralMenu(e.currentTarget) }, icon('layers'), 'Add several', icon('down', 'icon-sm')),
+    h('button.btn.btn-quiet.hide-sm', { type: 'button', onclick: e => addSeveralMenu(e.currentTarget) }, icon('layers'), 'Add several'),
     h('button.icon-btn.show-sm', { type: 'button', 'aria-label': 'Export for chat', onclick: openExport }, icon('chat')),
     h('button.icon-btn.show-sm', { type: 'button', 'aria-label': 'Add several parts', onclick: e => addSeveralMenu(e.currentTarget) }, icon('layers')),
     h('button.icon-btn.icon-btn-primary.show-sm', { type: 'button', 'aria-label': 'Add part', onclick: () => openPartEditor() }, icon('plus')),

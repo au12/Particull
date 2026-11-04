@@ -52,7 +52,7 @@ function statusLine(summary) {
 
 // ---------- list ----------
 export async function renderProjects(root) {
-  const list = h('div.project-list', h('div.loading', 'Loading projects'));
+  const list = h('div.project-groups', h('div.loading', 'Loading projects'));
   clear(root,
     h('header.page-head',
       h('div', h('h1', 'Projects'), h('p.page-sub', 'Check a project’s bill of materials against your parts.')),
@@ -207,7 +207,7 @@ export function renderProject(root, id) {
     const setStatus = st => act(() => api(`/projects/${p.id}`, { method: 'PUT', body: { status: st } }));
     const statusBtn = h(`button.status-pill.status-${p.status}.status-btn`, { type: 'button', 'aria-label': `Status: ${PROJECT_STATUS[p.status].label}. Change`, onclick: e => menu(e.currentTarget,
       Object.entries(PROJECT_STATUS).map(([k, v]) => ({ label: v.label, icon: p.status === k ? 'check' : null, action: () => setStatus(k) }))) },
-    PROJECT_STATUS[p.status].label, icon('down'));
+    PROJECT_STATUS[p.status].label, icon('updown'));
     const moreBtn = h('button.icon-btn', { type: 'button', 'aria-label': 'More project actions', onclick: e => menu(e.currentTarget, [
       { label: 'Rename or edit notes', icon: 'edit', action: () => editProject(p) },
       p.archived
