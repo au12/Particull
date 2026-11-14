@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.3.0 (2026-11-14)
 
 ### Parts
 - On a computer the list is a table: name, package, part number, location and amount, sorted by clicking a heading. Phones keep two-line rows. A column most parts leave empty is left out
