@@ -2,6 +2,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { findMatches, MATCH_SUGGEST, compact } from './public/shared/match.js';
 import { LEVELS, roundQty } from './public/shared/stock.js';
 
@@ -16,6 +17,8 @@ export const DEFAULT_SETTINGS = {
   backupFrequency: 'daily',
   backupKeep: 14,
   backupHour: 3,
+  rememberMatches: true,
+  labelBaseUrl: '',
 };
 
 export const BACKUP_FREQUENCIES = ['off', '6h', 'daily', 'weekly'];
@@ -82,7 +85,39 @@ const SCHEMA = [
   ALTER TABLE projects ADD COLUMN status TEXT NOT NULL DEFAULT 'planned';
   ALTER TABLE projects ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
   `,
+  // v3: a log of every change to a part, for history and undo
+  `
+  CREATE TABLE part_events (
+    id INTEGER PRIMARY KEY,
+    part_id INTEGER,
+    part_name TEXT NOT NULL,
+    batch TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    changes TEXT NOT NULL DEFAULT '{}',
+    data TEXT NOT NULL DEFAULT '',
+    ref TEXT NOT NULL DEFAULT '',
+    undone INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX part_events_part ON part_events(part_id, id);
+  CREATE INDEX part_events_batch ON part_events(batch);
+  `,
 ];
+
+// What a change to a part was, for its history:
+//   edit     changed in the editor, the list or several at once
+//   create   added (one at a time, from a list, a kit or a received order)
+//   add      stock added to a part you already had (from a list or kit)
+//   build    taken out by building a project
+//   receive  added when an order for a project arrived
+//   delete   deleted
+//   restore  put back after a delete
+//   merge    combined with a duplicate
+//   undo     an undo of an earlier change
+export const UNDOABLE = ['edit', 'create', 'add', 'build', 'receive', 'delete'];
+const TRACKED_FIELDS = ['name', 'qty', 'stockLevel', 'unit', 'category', 'location', 'mpn', 'package', 'notes', 'link', 'aliases', 'minQty', 'cost'];
+const newBatch = () => crypto.randomBytes(6).toString('hex');
 
 // Line states:
 //   auto      matched on its own (same name, part number or a remembered alias)
@@ -131,6 +166,81 @@ export class Store {
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 3000;');
     this.migrate();
     this.matchCache = new Map();
+    this.action = null;
+  }
+
+  // ---------- change log ----------
+  /**
+   * Run fn as one action: every part change inside it is logged with the same batch,
+   * kind and reason, so one undo reverses all of it.
+   */
+  withAction(action, fn) {
+    const prev = this.action;
+    this.action = { batch: prev?.batch || newBatch(), kind: 'edit', reason: '', ref: '', ...prev, ...action };
+    try {
+      return this.tx(fn);
+    } finally {
+      this.action = prev;
+    }
+  }
+
+  logEvent(part, kind, changes = {}, { data = '', reason } = {}) {
+    const a = this.action || { batch: newBatch(), kind: 'edit', reason: '', ref: '' };
+    this.db.prepare(`INSERT INTO part_events (part_id, part_name, batch, kind, reason, changes, data, ref, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(part.id, part.name, a.batch, kind, reason ?? a.reason ?? '', JSON.stringify(changes), data ? JSON.stringify(data) : '', a.ref || '', now());
+  }
+
+  rowToEvent(r) {
+    let changes = {};
+    try { changes = JSON.parse(r.changes); } catch { /* ignore */ }
+    return { id: r.id, partId: r.part_id, partName: r.part_name, batch: r.batch, kind: r.kind, reason: r.reason, changes, ref: r.ref, undone: Boolean(r.undone), at: r.created_at };
+  }
+
+  partHistory(partId, limit = 40) {
+    return this.db.prepare('SELECT * FROM part_events WHERE part_id = ? ORDER BY id DESC LIMIT ?').all(int(partId), limit).map(r => this.rowToEvent(r));
+  }
+
+  /** The most recent change that could be undone, if the latest change allows it. */
+  lastChange() {
+    const row = this.db.prepare(`SELECT batch FROM part_events WHERE undone = 0 AND kind NOT IN ('undo', 'restore') ORDER BY id DESC LIMIT 1`).get();
+    if (!row) return null;
+    const events = this.db.prepare('SELECT * FROM part_events WHERE batch = ? AND undone = 0 ORDER BY id').all(row.batch).map(r => this.rowToEvent(r));
+    const undoable = events.every(e => UNDOABLE.includes(e.kind));
+    return { batch: row.batch, events, undoable, summary: describeBatch(events), at: events[events.length - 1].at };
+  }
+
+  /** Undo the most recent change: amounts and fields go back, added parts go away, deleted parts come back. */
+  undoLast() {
+    const last = this.lastChange();
+    if (!last) throw Object.assign(new Error('There’s nothing to undo.'), { status: 409 });
+    if (!last.undoable) throw Object.assign(new Error(`${last.summary} can’t be undone. Restore a backup to go back further.`), { status: 409 });
+    const touched = new Set();
+    this.withAction({ batch: newBatch(), kind: 'undo', reason: `Undid: ${last.summary}`, ref: '' }, () => {
+      const build = last.events.find(e => e.ref.startsWith('build:'));
+      if (build) {
+        this.undoBuild(Number(build.ref.split(':')[1]));
+        last.events.forEach(e => touched.add(e.partId));
+        return;
+      }
+      for (const e of [...last.events].reverse()) {
+        if (e.kind === 'delete') {
+          const row = this.db.prepare('SELECT data FROM part_events WHERE id = ?').get(e.id);
+          const { part, lineIds } = JSON.parse(row.data || '{}');
+          if (part && !this.getPart(part.id)) this.restorePart(part, lineIds || []);
+        } else if (e.kind === 'create') {
+          if (this.getPart(e.partId)) this.deletePart(e.partId, { log: false });
+        } else {
+          const patch = {};
+          for (const [field, [old]] of Object.entries(e.changes)) patch[field] = old;
+          if (Object.keys(patch).length && this.getPart(e.partId)) this.updatePart(e.partId, patch);
+        }
+        touched.add(e.partId);
+      }
+      const mark = this.db.prepare('UPDATE part_events SET undone = 1 WHERE id = ?');
+      for (const e of last.events) mark.run(e.id);
+    });
+    return { summary: last.summary, partIds: [...touched] };
   }
 
   migrate() {
@@ -185,6 +295,10 @@ export class Store {
       else if (k === 'backupFrequency') val = BACKUP_FREQUENCIES.includes(v) ? v : 'daily';
       else if (k === 'backupKeep') val = Math.min(365, Math.max(1, int(v, 14)));
       else if (k === 'backupHour') val = Math.min(23, Math.max(0, int(v, 3)));
+      else if (k === 'labelBaseUrl') {
+        const u = str(v, 200).replace(/\/+$/, '');
+        val = /^https?:\/\/[^\s/]+(\/[^\s]*)?$/i.test(u) ? u : '';
+      }
       stmt.run(k, JSON.stringify(val));
     }
     return this.getSettings();
@@ -231,7 +345,7 @@ export class Store {
     };
   }
 
-  createPart(input, { id } = {}) {
+  createPart(input, { id, logAs = 'create' } = {}) {
     const p = this.normalizePart(input);
     const t = now();
     const sql = `INSERT INTO parts (${id ? 'id, ' : ''}name, qty, category, location, mpn, package, notes, link, aliases, min_qty, cost, stock_level, unit, created_at, updated_at)
@@ -239,22 +353,36 @@ export class Store {
     const args = [p.name, p.qty, p.category, p.location, p.mpn, p.package, p.notes, p.link, JSON.stringify(p.aliases), p.minQty, p.cost, p.stockLevel, p.unit, input.createdAt || t, t];
     const r = this.db.prepare(sql).run(...(id ? [int(id), ...args] : args));
     this.matchCache.clear();
-    return this.getPart(Number(r.lastInsertRowid));
+    const part = this.getPart(Number(r.lastInsertRowid));
+    if (logAs) this.logEvent(part, logAs, logAs === 'create' ? { qty: [null, part.qty], stockLevel: [null, part.stockLevel] } : {});
+    return part;
   }
 
   updatePart(id, patch) {
     const existing = this.getPart(id);
     if (!existing) return null;
     const p = this.normalizePart(patch, existing);
+    const changes = {};
+    for (const f of TRACKED_FIELDS) {
+      const a = existing[f] ?? null, b = p[f] ?? null;
+      if (JSON.stringify(a) !== JSON.stringify(b)) changes[f] = [a, b];
+    }
+    if (!Object.keys(changes).length) return existing;
     this.db.prepare(`UPDATE parts SET name=?, qty=?, category=?, location=?, mpn=?, package=?, notes=?, link=?, aliases=?, min_qty=?, cost=?, stock_level=?, unit=?, updated_at=? WHERE id=?`)
       .run(p.name, p.qty, p.category, p.location, p.mpn, p.package, p.notes, p.link, JSON.stringify(p.aliases), p.minQty, p.cost, p.stockLevel, p.unit, now(), existing.id);
     this.matchCache.clear();
+    this.logEvent(existing, this.action?.kind || 'edit', changes);
     return this.getPart(existing.id);
   }
 
   adjustQty(id, delta) {
-    const r = this.db.prepare('UPDATE parts SET qty = MAX(0, ROUND(qty + ?, 3)), updated_at = ? WHERE id = ?').run(roundQty(delta) || 0, now(), int(id));
-    return r.changes ? this.getPart(id) : null;
+    const part = this.getPart(id);
+    if (!part) return null;
+    const next = Math.max(0, roundQty(part.qty + (roundQty(delta) || 0)));
+    if (next === part.qty) return part;
+    this.db.prepare('UPDATE parts SET qty = ?, updated_at = ? WHERE id = ?').run(next, now(), part.id);
+    this.logEvent(part, this.action?.kind || 'edit', { qty: [part.qty, next] });
+    return this.getPart(part.id);
   }
 
   /**
@@ -279,12 +407,14 @@ export class Store {
     if ('unit' in patch) allowed.unit = patch.unit;
     if ('stockLevel' in patch) allowed.stockLevel = patch.stockLevel;
     if (!Object.keys(allowed).length) throw Object.assign(new Error('Nothing to change.'), { status: 400 });
-    return this.tx(() => ids(partIds).map(id => this.updatePart(id, allowed)).filter(Boolean));
+    const list = ids(partIds);
+    return this.withAction({ kind: 'edit', reason: list.length > 1 ? `Changed ${list.length} parts` : '' }, () => list.map(id => this.updatePart(id, allowed)).filter(Boolean));
   }
 
   /** Delete several parts. Returns what's needed to put them back. */
   bulkDelete(partIds) {
-    return this.tx(() => ids(partIds).map(id => {
+    const list = ids(partIds);
+    return this.withAction({ kind: 'delete', reason: list.length > 1 ? `Deleted ${list.length} parts` : '' }, () => list.map(id => {
       const lineIds = this.linesUsingPart(id);
       const part = this.deletePart(id);
       return part && { part, lineIds };
@@ -304,7 +434,7 @@ export class Store {
     if (!keep) throw Object.assign(new Error('That part no longer exists.'), { status: 404 });
     const others = ids(otherIds).filter(id => id !== keep.id).map(id => this.getPart(id)).filter(Boolean);
     if (!others.length) throw Object.assign(new Error('Pick at least two parts to merge.'), { status: 400 });
-    return this.tx(() => {
+    return this.withAction({ kind: 'merge', reason: `Merged with ${others.map(o => o.name).join(', ')}` }, () => {
       const next = { ...keep };
       const rank = { plenty: 3, some: 2, low: 1, out: 0 };
       for (const o of others) {
@@ -325,6 +455,7 @@ export class Store {
           if (!changes.some(c => c.partId === o.id)) continue;
           this.db.prepare('UPDATE builds SET changes = ? WHERE id = ?').run(JSON.stringify(changes.map(c => (c.partId === o.id ? { ...c, partId: keep.id } : c))), b.id);
         }
+        this.logEvent(o, 'merge', {}, { reason: `Merged into ${keep.name}` });
         this.db.prepare('DELETE FROM parts WHERE id = ?').run(o.id);
       }
       const merged = this.updatePart(keep.id, next);
@@ -337,9 +468,10 @@ export class Store {
     return this.db.prepare('SELECT id FROM bom_lines WHERE part_id = ?').all(int(id)).map(r => r.id);
   }
 
-  deletePart(id) {
+  deletePart(id, { log = true } = {}) {
     const part = this.getPart(id);
     if (!part) return null;
+    if (log) this.logEvent(part, 'delete', {}, { data: { part, lineIds: this.linesUsingPart(part.id) } });
     this.db.prepare(`UPDATE bom_lines SET state = 'none', score = NULL, match_notes = '[]' WHERE part_id = ?`).run(part.id);
     this.db.prepare('DELETE FROM parts WHERE id = ?').run(part.id);
     this.matchCache.clear();
@@ -349,7 +481,8 @@ export class Store {
   /** Restore a deleted part with its id, then re-link BOM lines that pointed at it. */
   restorePart(part, lineIds = []) {
     return this.tx(() => {
-      const restored = this.createPart(part, { id: part.id });
+      const restored = this.createPart(part, { id: part.id, logAs: 'restore' });
+      this.db.prepare(`UPDATE part_events SET undone = 1 WHERE part_id = ? AND kind = 'delete' AND undone = 0`).run(restored.id);
       const stmt = this.db.prepare(`UPDATE bom_lines SET part_id = ?, state = 'confirmed' WHERE id = ? AND part_id IS NULL`);
       for (const l of lineIds) stmt.run(restored.id, int(l));
       return restored;
@@ -366,8 +499,9 @@ export class Store {
    * Add many parts at once. Rows with mergeInto add their quantity to an existing part.
    * @returns {{created: number, merged: number, parts: object[]}}
    */
-  bulkAdd(rows) {
-    return this.tx(() => {
+  bulkAdd(rows, { source = 'list' } = {}) {
+    const reason = source === 'kit' ? 'Added from a kit' : source === 'list' ? 'Added from a list' : '';
+    return this.withAction({ kind: 'add', reason }, () => {
       let created = 0, merged = 0;
       const touched = [];
       for (const r of rows || []) {
@@ -641,27 +775,33 @@ export class Store {
       use.set(l.part.id, roundQty((use.get(l.part.id) || 0) + l.qty * n));
     }
     return this.tx(() => {
+      const r = this.db.prepare('INSERT INTO builds (project_id, count, changes, created_at) VALUES (?, ?, ?, ?)').run(project.id, n, '[]', now());
+      const buildId = Number(r.lastInsertRowid);
       const changes = [];
-      for (const [partId, amount] of use) {
-        const part = this.getPart(partId);
-        const take = Math.min(part.qty, amount);
-        if (!take) continue;
-        this.adjustQty(partId, -take);
-        changes.push({ partId, name: part.name, delta: -take });
-      }
-      const r = this.db.prepare('INSERT INTO builds (project_id, count, changes, created_at) VALUES (?, ?, ?, ?)').run(project.id, n, JSON.stringify(changes), now());
+      this.withAction({ batch: newBatch(), kind: 'build', reason: `Built ${project.name}${n > 1 ? ` ×${n}` : ''}`, ref: `build:${buildId}` }, () => {
+        for (const [partId, amount] of use) {
+          const part = this.getPart(partId);
+          const take = Math.min(part.qty, amount);
+          if (!take) continue;
+          this.adjustQty(partId, -take);
+          changes.push({ partId, name: part.name, delta: -take });
+        }
+      });
+      this.db.prepare('UPDATE builds SET changes = ? WHERE id = ?').run(JSON.stringify(changes), buildId);
       this.touchProject(project.id);
-      return { build: { id: Number(r.lastInsertRowid), count: n }, changes };
+      return { build: { id: buildId, count: n }, changes };
     });
   }
 
   undoBuild(buildId) {
     const b = this.db.prepare('SELECT * FROM builds WHERE id = ?').get(int(buildId));
     if (!b) return null;
-    return this.tx(() => {
+    const project = this.db.prepare('SELECT name FROM projects WHERE id = ?').get(b.project_id);
+    return this.withAction({ kind: 'undo', reason: `Put back parts from building ${project?.name || 'a project'}` }, () => {
       const changes = JSON.parse(b.changes);
       for (const c of changes) this.adjustQty(c.partId, -c.delta);
       this.db.prepare('DELETE FROM builds WHERE id = ?').run(b.id);
+      this.db.prepare('UPDATE part_events SET undone = 1 WHERE ref = ?').run(`build:${b.id}`);
       return changes.length;
     });
   }
@@ -670,13 +810,15 @@ export class Store {
    * Add what a project was short of to inventory (after an order arrives).
    * Unmatched lines become new parts and are linked to the line.
    */
-  receiveShortfall(projectId, { category = '' } = {}, guess = () => '') {
+  receiveShortfall(projectId, { category = '', lineIds = null } = {}, guess = () => '') {
     const project = this.getProject(projectId);
     if (!project) return null;
-    return this.tx(() => {
+    const only = Array.isArray(lineIds) ? new Set(ids(lineIds)) : null;
+    return this.withAction({ kind: 'receive', reason: `Received for ${project.name}` }, () => {
       let added = 0, created = 0;
       for (const l of project.lines) {
         if (l.status !== 'short' && l.status !== 'missing') continue;
+        if (only && !only.has(l.id)) continue;
         if (l.part && (l.state === 'auto' || l.state === 'confirmed')) {
           this.addStock(l.part.id, l.short);
           added++;
@@ -689,6 +831,31 @@ export class Store {
       this.touchProject(project.id);
       return { added, created };
     });
+  }
+
+  // ---------- where parts are used ----------
+  /**
+   * Which projects use each part. Projects that aren't archived or done are listed;
+   * planned and building ones count toward what you need.
+   * @returns {Map<number, {need:number, projects:Array<{id:number,name:string,status:string,need:number}>}>}
+   */
+  usage() {
+    const out = new Map();
+    const projects = this.db.prepare(`SELECT * FROM projects WHERE archived = 0 AND status != 'done' ORDER BY name COLLATE NOCASE`).all();
+    const lines = this.db.prepare(`SELECT project_id, part_id, qty FROM bom_lines WHERE part_id IS NOT NULL AND state IN ('auto', 'confirmed')`).all();
+    const byProject = new Map(projects.map(p => [p.id, p]));
+    for (const l of lines) {
+      const p = byProject.get(l.project_id);
+      if (!p) continue;
+      const need = roundQty(l.qty * p.builds);
+      const entry = out.get(l.part_id) || { need: 0, projects: [] };
+      let pe = entry.projects.find(x => x.id === p.id);
+      if (!pe) { pe = { id: p.id, name: p.name, status: p.status, need: 0 }; entry.projects.push(pe); }
+      pe.need = roundQty(pe.need + need);
+      if (p.status === 'planned' || p.status === 'building') entry.need = roundQty(entry.need + need);
+      out.set(l.part_id, entry);
+    }
+    return out;
   }
 
   // ---------- backup ----------
@@ -706,8 +873,8 @@ export class Store {
   importAll(data) {
     if (!data || data.app !== 'particull' || !Array.isArray(data.parts)) throw Object.assign(new Error('This file is not a Particull backup.'), { status: 400 });
     return this.tx(() => {
-      this.db.exec('DELETE FROM builds; DELETE FROM bom_lines; DELETE FROM projects; DELETE FROM parts;');
-      for (const p of data.parts) this.createPart(p, { id: p.id });
+      this.db.exec('DELETE FROM builds; DELETE FROM bom_lines; DELETE FROM projects; DELETE FROM parts; DELETE FROM part_events;');
+      for (const p of data.parts) this.createPart(p, { id: p.id, logAs: null });
       const known = new Set(data.parts.map(p => p.id));
       const lineStmt = this.db.prepare(`INSERT INTO bom_lines (project_id, position, qty, name, mpn, package, refs, notes, part_id, state, score, match_notes, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
@@ -728,4 +895,23 @@ export class Store {
       return { parts: data.parts.length, projects: (data.projects || []).length };
     });
   }
+}
+
+/** A short description of one action, for undo messages: "10k resistor 48 → 50", "Built Dingr ×2". */
+export function describeBatch(events) {
+  const e = events[0];
+  if (!e) return 'Nothing';
+  if (events.some(x => x.kind === 'merge')) return 'Merging parts';
+  if (e.kind === 'build' || e.kind === 'receive' || (e.reason && events.length > 1)) return e.reason || `${events.length} changes`;
+  if (events.length > 1) return `${events.length} changes`;
+  if (e.kind === 'create') return `adding ${e.partName}`;
+  if (e.kind === 'delete') return `deleting ${e.partName}`;
+  if (e.kind === 'merge') return 'Merging parts';
+  const fields = Object.keys(e.changes);
+  if (fields.length === 1 && fields[0] === 'qty') {
+    const [a, b] = e.changes.qty;
+    return `${e.partName} ${a} → ${b}`;
+  }
+  if (fields.length === 1 && fields[0] === 'stockLevel') return `${e.partName}: amount changed`;
+  return `changes to ${e.partName}`;
 }

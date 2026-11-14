@@ -1,9 +1,11 @@
 // Boot, sign-in, navigation.
-import { h, clear, icon, api, showError, toast, setUnauthorizedHandler, onOfflineChange } from './lib.js';
+import { h, clear, icon, api, showError, toast, setUnauthorizedHandler, onOfflineChange, kbd, modKey } from './lib.js';
 import { state, loadParts, applyTheme } from './state.js';
 import { renderParts } from './parts.js';
 import { renderProjects, renderProject } from './projects.js';
 import { renderSettings } from './settings.js';
+import { renderLabels } from './labels.js';
+import { installShortcuts, openPalette } from './palette.js';
 
 const NAV = [
   { key: 'parts', label: 'Parts', icon: 'parts', href: '#/parts' },
@@ -28,7 +30,9 @@ function shell() {
     h('div.shell',
       h('aside.rail',
         brand(),
-        h('nav.rail-nav', { 'aria-label': 'Main' }, NAV.map(n => h('a.nav-link', { href: n.href, dataset: { key: n.key } }, icon(n.icon), h('span', n.label)))),
+        h('button.rail-jump', { type: 'button', title: `Jump to a part, project or action (${modKey()}K)`, 'aria-label': 'Jump to a part, project or action', onclick: openPalette },
+          icon('search'), h('span.rail-jump-label', 'Jump to…'), h('span.rail-jump-keys', kbd(modKey()), kbd('K'))),
+        h('nav.rail-nav', { 'aria-label': 'Main' }, NAV.map(n => h('a.nav-link', { href: n.href, title: n.label, dataset: { key: n.key } }, icon(n.icon), h('span', n.label)))),
         h('div.rail-sub', { id: 'rail-sub' })),
       main),
     h('nav.tabbar', { 'aria-label': 'Main' }, NAV.map(n => h('a.tab-link', { href: n.href, dataset: { key: n.key } }, icon(n.icon), h('span', n.label)))),
@@ -59,12 +63,23 @@ new MutationObserver(() => {
 }).observe(document.getElementById('app'), { childList: true, subtree: true });
 window.addEventListener('scroll', () => document.body.classList.toggle('scrolled', window.scrollY > 2), { passive: true });
 
+// Rows standing in for the list while the first load finishes.
+function skeleton() {
+  return [
+    h('div.skel.skel-title'),
+    h('div.skeleton', { 'aria-busy': 'true', 'aria-label': 'Loading' }, Array.from({ length: 8 }, (_, i) => h('div.skeleton-row',
+      h('span.skel', { style: { width: `${38 + ((i * 37) % 30)}%` } }),
+      h('span.skel', { style: { width: '42px', marginLeft: 'auto' } })))),
+  ];
+}
+
 function route() {
   const hash = location.hash.replace(/^#\/?/, '') || 'parts';
-  const [section, id] = hash.split('/');
-  const key = NAV.some(n => n.key === section) ? section : 'parts';
+  const [section, id, ...rest] = hash.split('/');
+  const key = NAV.some(n => n.key === section) || section === 'labels' ? section : 'parts';
+  const navKey = key === 'labels' ? 'parts' : key;
   document.querySelectorAll('.nav-link, .tab-link').forEach(a => {
-    if (a.dataset.key === key) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    if (a.dataset.key === navKey) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   });
   document.querySelectorAll('dialog[open]').forEach(d => { d.close(); d.remove(); });
   document.querySelector('.menu')?.remove();
@@ -72,12 +87,14 @@ function route() {
   cleanup = null;
   document.getElementById('rail-sub')?.replaceChildren();
   window.scrollTo(0, 0);
-  const titles = { parts: 'Parts', projects: 'Projects', settings: 'Settings' };
+  const titles = { parts: 'Parts', projects: 'Projects', settings: 'Settings', labels: 'Location labels' };
   document.title = `${titles[key]} · Particull`;
-  if (key === 'parts') cleanup = renderParts(main);
+  main.className = 'view';
+  if (key === 'parts') cleanup = renderParts(main, id ? [id, ...rest] : []);
   else if (key === 'projects' && id) { cleanup = renderProject(main, Number(id)); document.title = 'Project · Particull'; }
   else if (key === 'projects') renderProjects(main);
-  else cleanup = renderSettings(main);
+  else if (key === 'labels') cleanup = renderLabels(main);
+  else { main.classList.add('view-narrow'); cleanup = renderSettings(main); }
   watchTitle();
 }
 
@@ -111,6 +128,7 @@ function loginScreen(message = '') {
 
 async function start() {
   shell();
+  clear(main, skeleton());
   try {
     await loadParts();
   } catch (e) {
@@ -146,6 +164,7 @@ onOfflineChange(isOffline => {
 
 async function boot() {
   registerServiceWorker();
+  installShortcuts();
   setUnauthorizedHandler(() => loginScreen('Your session ended. Sign in again.'));
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
   window.addEventListener('hashchange', route);

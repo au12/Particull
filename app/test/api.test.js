@@ -73,3 +73,38 @@ test('rejects cross-site writes and bad input', async () => {
   assert.equal((await call('/api/parts', { method: 'POST', body: { name: '  ' } })).status, 400);
   assert.equal((await call('/api/projects/999')).status, 404);
 });
+
+test('shopping lists can be limited to some lines; label links must be web addresses', async () => {
+  const proj = await call('/api/projects', { method: 'POST', body: { name: 'Lamp', bom: '2x Piezo buzzer\n1x USB-C breakout\n3x 470R resistor' } });
+  const [a, , c] = proj.json.lines;
+  const some = await call(`/api/projects/${proj.json.id}/export?kind=shopping&lines=${a.id},${c.id}`);
+  assert.match(some.text, /Piezo buzzer/);
+  assert.match(some.text, /470R/);
+  assert.doesNotMatch(some.text, /USB-C/);
+  const csv = await call(`/api/projects/${proj.json.id}/export?kind=shopping&format=csv&lines=${a.id}`);
+  assert.equal(csv.text.trim().split('\n').length, 2);
+
+  let s = await call('/api/settings', { method: 'PUT', body: { labelBaseUrl: 'http://tower.local:8080/' } });
+  assert.equal(s.json.labelBaseUrl, 'http://tower.local:8080');
+  s = await call('/api/settings', { method: 'PUT', body: { labelBaseUrl: 'javascript:alert(1)' } });
+  assert.equal(s.json.labelBaseUrl, '');
+  assert.equal(s.json.rememberMatches, true);
+});
+
+test('part details: projects that use it, its history, and what undo would reverse', async () => {
+  const part = (await call('/api/parts', { method: 'POST', body: { name: 'Rotary encoder', qty: 3 } })).json;
+  await call('/api/projects', { method: 'POST', body: { name: 'Knob box', status: 'building', builds: 2, bom: '1x Rotary encoder' } });
+  await call(`/api/parts/${part.id}/qty`, { method: 'POST', body: { set: 1 } });
+  let d = (await call(`/api/parts/${part.id}/details`)).json;
+  assert.equal(d.usage.need, 2);
+  assert.deepEqual(d.usage.projects.map(p => p.name), ['Knob box']);
+  assert.deepEqual(d.history.map(e => e.kind), ['edit', 'create']);
+  assert.equal(d.undoBatch, d.history[0].batch);
+  const parts = (await call('/api/parts')).json;
+  assert.equal(parts.usage[part.id].need, 2);
+  const undo = await call('/api/history/undo', { method: 'POST', body: {} });
+  assert.equal(undo.json.summary, 'Rotary encoder 3 → 1');
+  d = (await call(`/api/parts/${part.id}/details`)).json;
+  assert.equal(d.part.qty, 3);
+  assert.equal(d.history.find(e => e.kind === 'edit').undone, true);
+});

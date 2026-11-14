@@ -22,6 +22,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      # Dev packages only: jsQR checks the QR codes the app draws. The app itself installs nothing.
+      - run: npm ci
+        working-directory: app
       - run: npm test
         working-directory: app
 

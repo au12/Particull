@@ -62,7 +62,10 @@ async function goto(hash, waitFor) {
   if (waitFor) await page.waitForSelector(waitFor);
 }
 
+// Only rows on screen are drawn, so count with what the list says it holds.
 const rows = () => page.$$eval('.part-row', els => els.map(e => e.querySelector('.part-name').textContent));
+const listCount = () => page.$eval('.part-list', e => Number(e.dataset.count));
+const search = text => clearAndType('.search-input', text);
 const openDialogs = () => page.$$eval('dialog[open]', d => d.length);
 
 before(async () => {
@@ -72,7 +75,8 @@ before(async () => {
   execFileSync(process.execPath, ['scripts/seed-demo.js', BASE], { cwd: ROOT, stdio: 'pipe' });
   browser = await launchBrowser();
   page = await browser.newPage();
-  await page.setViewport({ width: 1280, height: 860 });
+  // Below the width where the inspector opens, so parts open in a sheet; the inspector has its own test.
+  await page.setViewport({ width: 1100, height: 860 });
   await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
   page.on('console', m => { if (m.type() === 'error') problems.push(`console: ${m.text()}`); });
   page.on('pageerror', e => problems.push(`page: ${e.message}`));
@@ -111,7 +115,9 @@ test('search matches text, locations and values like 4k7', async () => {
   assert.deepEqual(await rows(), ['100nF ceramic capacitor']);
   await clearAndType('.search-input', '');
   await click('.rail-filter', '^Resistors');
-  assert.equal((await rows()).length, 62);
+  assert.equal(await listCount(), 62);
+  // Only what's on screen is drawn.
+  assert.ok((await rows()).length < 62);
   await click('.rail-filter', '^All parts');
 });
 
@@ -148,14 +154,18 @@ test('points out duplicates and adds to the existing part', async () => {
 
 test('delete with undo, and a warning before losing edits', async () => {
   await goto('#/parts', '.part-row');
+  await search('BC547');
   await click('.part-row', 'BC547');
-  await click('dialog[open] button', 'Delete');
+  // Delete lives in the sheet's "…" menu.
+  await click('dialog[open] .sheet-menu', 'More actions');
+  await click('.menu-item', 'Delete part');
   await click('dialog[open] button', 'Delete part');
   await sleep(300);
   assert.equal(await part('BC547 transistor'), undefined);
   await click('.toast-action', 'Undo');
   await sleep(400);
   assert.ok(await part('BC547 transistor'));
+  await search('BC547');
   await click('.part-row', 'BC547');
   await type('dialog[open] .input-lg', ' X');
   await page.keyboard.press('Escape');
@@ -215,6 +225,7 @@ test('add a kit, merging parts you already have', async () => {
 
 test('select parts to move, merge and delete them together', async () => {
   await goto('#/parts', '.part-row');
+  await search('5mm');
   await click('.select-btn', 'Select');
   for (const n of ['5mm blue LED', '5mm white LED', '5mm yellow LED']) await click('.part-row', n);
   assert.match(await page.$eval('.bar-count', e => e.textContent), /3 selected/);
@@ -272,13 +283,22 @@ test('project: add a missing part, shop, receive, build and undo', async () => {
   let proj = await api(`/api/projects/${dingr.id}`);
   assert.equal(proj.lines.find(l => l.name === '5.1k resistor').status, 'short');
 
+  // The shopping list is a checklist: tick what arrived and add just that.
   await click('.summary-actions .btn', 'Shopping list');
-  await page.waitForSelector('dialog[open] textarea');
-  await sleep(300);
-  const list = await page.$eval('dialog[open] textarea', e => e.value);
-  assert.match(list, /Piezo buzzer/);
-  assert.match(list, /5\.1k/);
-  await click('dialog[open] button', 'I got these');
+  await page.waitForSelector('dialog[open] .shop-row');
+  const list = await page.$$eval('dialog[open] .shop-name', els => els.map(e => e.textContent));
+  assert.ok(list.includes('Piezo buzzer'));
+  assert.ok(list.some(n => /5\.1k/.test(n)));
+  await click('dialog[open] .shop-row', 'Piezo buzzer');
+  await click('dialog[open] .btn-primary', 'I got these \\(1\\)');
+  await click('dialog[open] button', 'Add to parts');
+  await sleep(600);
+  proj = await api(`/api/projects/${dingr.id}`);
+  assert.equal(proj.lines.find(l => l.name === 'Piezo buzzer').status, 'ok');
+  assert.equal(proj.lines.find(l => l.name === '5.1k resistor').status, 'short');
+  await click('.summary-actions .btn', 'Shopping list');
+  await page.waitForSelector('dialog[open] .shop-row');
+  await click('dialog[open] .btn-primary', 'I got everything');
   await click('dialog[open] button', 'Add to parts');
   await sleep(600);
   proj = await api(`/api/projects/${dingr.id}`);
@@ -401,16 +421,181 @@ test('opens from the service worker and shows saved data when the server is down
   await page.waitForFunction(() => navigator.serviceWorker?.controller, { timeout: 10000 });
   await page.reload();
   await page.waitForSelector('.part-row');
-  const count = (await rows()).length;
+  const count = await listCount();
   server.kill();
   await sleep(300);
   await page.reload();
   await page.waitForSelector('.part-row', { timeout: 15000 });
-  assert.equal((await rows()).length, count);
+  assert.equal(await listCount(), count);
   await page.waitForSelector('.offline-banner');
   // Restart for any later tests.
   startServer();
   await waitForServer();
+});
+
+test('inspector: details beside the list save as you type, with history and undo', async () => {
+  await page.setViewport({ width: 1440, height: 900 });
+  try {
+    await goto('#/parts', '.part-row');
+    await search('Teensy 4.1');
+    await click('.part-row', 'Teensy 4.1');
+    await page.waitForSelector('.inspector .input-lg');
+    assert.equal(await page.$eval('.inspector .input-lg', e => e.value), 'Teensy 4.1');
+    assert.equal(await openDialogs(), 0);
+    // Where it's used
+    await page.waitForSelector('.inspector .extra-row');
+    // Change the location: it saves without pressing anything.
+    const loc = 'input[list="dl-locs"]';
+    await page.click(`.inspector ${loc}`, { clickCount: 3 });
+    await page.keyboard.type('Drawer Q9');
+    await sleep(1400);
+    assert.equal((await part('Teensy 4.1')).location, 'Drawer Q9');
+    await page.waitForFunction(() => [...document.querySelectorAll('.inspector .hist-title')].some(e => e.textContent === 'Moved'));
+    await click('.inspector .hist-undo', 'Undo');
+    await sleep(700);
+    assert.notEqual((await part('Teensy 4.1')).location, 'Drawer Q9');
+    assert.notEqual(await page.$eval(`.inspector ${loc}`, e => e.value), 'Drawer Q9');
+    // Arrow keys move through the list; Esc closes the details.
+    await search('resistor');
+    await page.evaluate(() => document.activeElement.blur());
+    await page.keyboard.press('ArrowDown');
+    await sleep(200);
+    const first = await page.$eval('.part-row.is-current .part-name', e => e.textContent);
+    await page.keyboard.press('ArrowDown');
+    await sleep(300);
+    const second = await page.$eval('.part-row.is-current .part-name', e => e.textContent);
+    assert.notEqual(first, second);
+    assert.equal(await page.$eval('.inspector .input-lg', e => e.value), second);
+    await page.keyboard.press('Escape');
+    await sleep(200);
+    assert.equal(await page.$('.part-row.is-current'), null);
+    assert.ok(await page.$('.inspector .insp-empty'));
+    // Sort by a column heading.
+    await search('');
+    await click('.col', '^Amount');
+    const amounts = await page.$$eval('.part-row', els => els.slice(0, 5).map(e => e.querySelector('.stepper-value')?.value).filter(Boolean).map(Number));
+    assert.deepEqual(amounts, [...amounts].sort((a, b) => a - b));
+    await click('.col', '^Name');
+  } finally {
+    await page.setViewport({ width: 1100, height: 860 });
+  }
+});
+
+test('undo the last change with the keyboard', async () => {
+  await goto('#/parts', '.part-row');
+  await search('CR2032');
+  await click('.part-row', 'CR2032');
+  await click('dialog[open] .amount-seg .seg', '^Count$');
+  await click('dialog[open] .btn-primary', '^Save');
+  await sleep(400);
+  const before_ = (await part('CR2032 coin cell')).qty;
+  await page.focus('.part-row');
+  await page.keyboard.press('+');
+  await sleep(900);
+  assert.equal((await part('CR2032 coin cell')).qty, before_ + 1);
+  await page.evaluate(() => document.activeElement.blur());
+  await page.keyboard.down('Control');
+  await page.keyboard.press('z');
+  await page.keyboard.up('Control');
+  await sleep(700);
+  assert.equal((await part('CR2032 coin cell')).qty, before_);
+  assert.match(await page.$eval('.toast:last-child', e => e.textContent), /Undid/);
+});
+
+test('quick jump box opens parts, projects and actions', async () => {
+  await goto('#/settings', '.settings-card');
+  const jump = async text => {
+    await page.keyboard.down('Control');
+    await page.keyboard.press('k');
+    await page.keyboard.up('Control');
+    await page.waitForSelector('dialog.palette[open] .palette-input');
+    await page.type('dialog.palette .palette-input', text);
+    await sleep(400);
+  };
+  await jump('dingr');
+  assert.match(await page.$eval('.palette-item[aria-selected="true"]', e => e.textContent), /Dingr prototype/);
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('.bom-line, .bom-fold');
+  assert.match(page.url(), /#\/projects\/\d+$/);
+  await jump('print location');
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('.label-sheet');
+  assert.match(page.url(), /#\/labels$/);
+  // A part opens over whatever page you're on.
+  await jump('teensy 4.1');
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('dialog.sheet[open] .input-lg');
+  assert.equal(await page.$eval('dialog[open] .input-lg', e => e.value), 'Teensy 4.1');
+  await page.keyboard.press('Escape');
+  await sleep(300);
+  // ? lists the shortcuts
+  await page.keyboard.press('?');
+  await page.waitForSelector('dialog[open] .shortcut-list');
+  await page.keyboard.press('Escape');
+  await sleep(300);
+});
+
+test('location labels, and the link on each one', async () => {
+  await goto('#/labels', '.label-sheet');
+  const locations = (await api('/api/parts')).groups.locations.length;
+  assert.equal(await page.$$eval('.label:not(.is-skip)', e => e.length), locations);
+  await click('.seg', 'Avery 5163');
+  await click('.labels-start .stepper-btn', 'Add one');
+  await click('.labels-start .stepper-btn', 'Add one');
+  await sleep(200);
+  assert.equal(await page.$$eval('.label.is-skip', e => e.length), 2);
+  assert.equal(await page.$$eval('.label-sheet', e => e.length), Math.ceil((locations + 2) / 10));
+  const href = await page.$eval('.label:not(.is-skip)', e => e.title);
+  assert.match(href, /\/#\/parts\/loc\//);
+  // Scanning a label opens what's in that location.
+  await page.goto(`${BASE}/#/parts/loc/${encodeURIComponent('Drawer A2')}`);
+  await page.waitForSelector('.part-row');
+  const inA2 = (await api('/api/parts')).parts.filter(p => p.location === 'Drawer A2').length;
+  assert.equal(await listCount(), inA2);
+  assert.match(await page.$eval('.page-sub', e => e.textContent), /in Drawer A2/);
+  assert.match(page.url(), /#\/parts$/);
+  await click('.rail-filter', '^All parts');
+});
+
+test('paste a BOM onto a project to import it', async () => {
+  const proj = (await api('/api/projects')).projects.find(p => p.name === 'Quick test');
+  await goto(`#/projects/${proj.id}`, '.bom-line, .bom-fold');
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.setData('text/plain', '3x WS2812B-Mini RGB LED\n1x Piezo buzzer');
+    document.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true }));
+  });
+  await page.waitForSelector('dialog[open] .parse-name');
+  assert.match(await page.$eval('dialog[open] textarea', e => e.value), /WS2812B-Mini/);
+  assert.match(await page.$eval('dialog[open] .parse-preview', e => e.textContent), /2 parts found/);
+  await click('dialog[open] .btn-primary', '^Import');
+  await sleep(600);
+  assert.equal((await api(`/api/projects/${proj.id}`)).lines.length, 4);
+});
+
+test('a long list draws only the rows on screen', async () => {
+  const rowsToAdd = Array.from({ length: 1500 }, (_, i) => ({ name: `Bulk test part ${String(i).padStart(4, '0')}`, qty: i % 40, category: 'Bulk test' }));
+  await page.evaluate(async (u, body) => { await fetch(u, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }, `${BASE}/api/parts/bulk`, { rows: rowsToAdd });
+  await page.goto(`${BASE}/#/parts`);
+  await page.reload();
+  await page.waitForSelector('.part-row');
+  assert.ok(await listCount() > 1500);
+  assert.ok((await rows()).length < 80);
+  assert.ok(await page.evaluate(() => document.querySelectorAll('*').length) < 4000);
+  // Scroll to the end: the rows drawn reach the bottom of the list.
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await page.waitForFunction(() => {
+    const el = document.querySelector('.part-list');
+    return Math.max(...[...el.children].map(c => c.offsetTop + c.offsetHeight)) >= el.offsetHeight - 1;
+  }, { timeout: 3000 });
+  await search('Bulk test part 1499');
+  assert.deepEqual(await rows(), ['Bulk test part 1499']);
+  // Keyboard: down from the search goes into the list.
+  await search('Bulk test part 00');
+  await page.focus('.search-input');
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await page.evaluate(() => document.activeElement.querySelector('.part-name')?.textContent), 'Bulk test part 0000');
 });
 
 test('no errors in the browser console', () => {

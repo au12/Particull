@@ -61,6 +61,9 @@ export function renderSettings(root) {
 
     const group = (field, title, list) => h('section.settings-card',
       h('h2', title),
+      field === 'location' && list.length > 0 && h('div.setting',
+        h('div.setting-text', h('span.setting-label', 'Location labels'), h('span.setting-hint', 'Print a label with a QR code for each drawer or bin. Scanning one opens what’s in it.')),
+        h('a.btn.btn-sm', { href: '#/labels' }, icon('qr'), 'Print labels')),
       list.length
         ? h('div.group-list', list.map(g => h('div.group-item',
           h('span.group-name', field === 'location' ? h('span.tape', g.name) : g.name),
@@ -83,6 +86,10 @@ export function renderSettings(root) {
           st.costTracking && h('label.setting',
             h('div.setting-text', h('span.setting-label', 'Currency symbol')),
             h('input.input.input-num', { value: st.currency, maxlength: '4', onchange: e => saveSettings({ currency: e.target.value }).catch(showError) }))),
+
+        h('section.settings-card',
+          h('h2', 'Projects'),
+          sw('rememberMatches', 'Remember names from BOMs', 'When you confirm a match, the name the BOM used is kept as another name for your part, so it matches by itself next time.')),
 
         h('section.settings-card',
           h('h2', 'Export for chat'),

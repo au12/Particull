@@ -21,8 +21,27 @@ const click = (p, sel, re) => p.evaluate((s, r) => {
   return Boolean(el);
 }, sel, re);
 
+// Desktop has buttons; on a phone the same choices are under the + menu.
+async function addMenu(p, desktopButton, menuItem) {
+  if (await click(p, '.page-actions .btn', desktopButton)) {
+    if (menuItem) await click(p, '.menu-item', menuItem);
+    return;
+  }
+  await click(p, '.page-actions .icon-btn', 'Add parts');
+  await click(p, '.menu-item', menuItem || desktopButton);
+}
+
 const shots = {
-  async parts(p) { await p.goto(`${base}/#/parts`); await p.waitForSelector('.part-row'); },
+  async parts(p) {
+    await p.goto(`${base}/#/parts`); await p.waitForSelector('.part-row');
+    // On wide screens, show a part in the inspector beside the list.
+    if (p.viewport().width >= 1200) {
+      await click(p, '.part-row', '^100nF ceramic');
+      await p.waitForSelector('.inspector .extra-row');
+      await p.evaluate(() => document.activeElement?.blur());
+      await sleep(400);
+    }
+  },
   async project(p) {
     await p.goto(`${base}/#/projects`); await p.waitForSelector('.project-row');
     await click(p, '.project-row', 'Dingr'); await p.waitForSelector('.bom-line');
@@ -30,15 +49,14 @@ const shots = {
   async projects(p) { await p.goto(`${base}/#/projects`); await p.waitForSelector('.project-row'); },
   async add(p) {
     await p.goto(`${base}/#/parts`); await p.waitForSelector('.part-row');
-    await click(p, '.page-actions button', '^(\\s*)?Add part');
+    await addMenu(p, '^Add part$');
     await p.waitForSelector('dialog[open] .input-lg');
     await p.type('dialog[open] .input-lg', '10K ohm resistor');
     await sleep(700);
   },
   async kit(p) {
     await p.goto(`${base}/#/parts`); await p.waitForSelector('.part-row');
-    await click(p, '.page-actions button', 'Add several');
-    await click(p, '.menu-item', 'Add a kit');
+    await addMenu(p, 'Add several', 'Add a kit');
     await p.waitForSelector('dialog[open] .kit-kind');
     await click(p, 'dialog[open] .kit-kind', 'Ceramic');
     await p.waitForSelector('dialog[open] .preview-row');
@@ -56,6 +74,22 @@ const shots = {
     await sleep(500);
   },
   async settings(p) { await p.goto(`${base}/#/settings`); await p.waitForSelector('.backup-item, .backup-empty'); },
+  async labels(p) { await p.goto(`${base}/#/labels`); await p.waitForSelector('.label svg'); },
+  async jump(p) {
+    await p.goto(`${base}/#/parts`); await p.waitForSelector('.part-row');
+    await p.keyboard.down('Control'); await p.keyboard.press('k'); await p.keyboard.up('Control');
+    await p.waitForSelector('dialog.palette .palette-input');
+    await p.type('dialog.palette .palette-input', 'esp32');
+    await sleep(400);
+  },
+  async shopping(p) {
+    await p.goto(`${base}/#/projects`); await p.waitForSelector('.project-row');
+    await click(p, '.project-row', 'Teensy'); await p.waitForSelector('.summary-actions .btn');
+    await click(p, '.summary-actions .btn', 'Shopping list');
+    await p.waitForSelector('dialog[open] .shop-row');
+    await click(p, 'dialog[open] .shop-row', 'tact switch');
+    await sleep(300);
+  },
 };
 
 const viewports = {

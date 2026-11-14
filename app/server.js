@@ -175,9 +175,9 @@ route('GET', '/api/settings', () => store.getSettings());
 route('PUT', '/api/settings', ({ body }) => store.updateSettings(body));
 
 // Parts
-route('GET', '/api/parts', () => ({ parts: store.listParts(), groups: store.groups() }));
+route('GET', '/api/parts', () => ({ parts: store.listParts(), groups: store.groups(), usage: Object.fromEntries(store.usage()) }));
 route('POST', '/api/parts', ({ body }) => store.createPart(body));
-route('POST', '/api/parts/bulk', ({ body }) => store.bulkAdd(body.rows));
+route('POST', '/api/parts/bulk', ({ body }) => store.bulkAdd(body.rows, { source: body.source === 'kit' ? 'kit' : 'list' }));
 route('POST', '/api/parts/restore', ({ body }) => store.restorePart(body.part, body.lineIds));
 route('POST', '/api/parts/bulk-update', ({ body }) => ({ parts: store.bulkUpdate(body.ids, body.patch) }));
 route('POST', '/api/parts/bulk-delete', ({ body }) => ({ removed: store.bulkDelete(body.ids) }));
@@ -187,6 +187,23 @@ route('POST', '/api/parts/adjust', ({ body }) => ({
   parts: (body.changes || []).map(c => store.adjustQty(c.partId, c.delta)).filter(Boolean),
 }));
 route('GET', '/api/parts/:id', ({ params }) => store.getPart(params.id) || notFound('part'));
+// Where a part is used and what happened to it, for the part's details.
+route('GET', '/api/parts/:id/details', ({ params }) => {
+  const part = store.getPart(params.id) || notFound('part');
+  const last = store.lastChange();
+  return {
+    part,
+    usage: store.usage().get(part.id) || { need: 0, projects: [] },
+    history: store.partHistory(part.id),
+    // The batch an undo would reverse right now, so the history can offer it.
+    undoBatch: last?.undoable ? last.batch : null,
+  };
+});
+route('GET', '/api/history/last', () => {
+  const last = store.lastChange();
+  return { last: last && { summary: last.summary, undoable: last.undoable, at: last.at } };
+});
+route('POST', '/api/history/undo', () => store.undoLast());
 route('PUT', '/api/parts/:id', ({ params, body }) => store.updatePart(params.id, body) || notFound('part'));
 route('POST', '/api/parts/:id/qty', ({ params, body }) => {
   if ('set' in body) return store.updatePart(params.id, { qty: body.set }) || notFound('part');
@@ -275,7 +292,7 @@ route('POST', '/api/builds/:id/undo', ({ params }) => {
   return { restored: n };
 });
 route('POST', '/api/projects/:id/receive', ({ params, body }) => {
-  const r = store.receiveShortfall(params.id, { category: body.category }, guessCategory) || notFound('project');
+  const r = store.receiveShortfall(params.id, { category: body.category, lineIds: Array.isArray(body.lineIds) ? body.lineIds : null }, guessCategory) || notFound('project');
   return { ...r, project: store.getProject(params.id) };
 });
 route('GET', '/api/lines/:id/candidates', ({ params }) => ({ candidates: store.candidatesFor(params.id) || notFound('line') }));
@@ -312,7 +329,10 @@ route('GET', '/api/projects/:id/export', ({ params, query }) => {
   const s = store.getSettings();
   const kind = query.get('kind') === 'bom' ? 'bom' : 'shopping';
   const format = query.get('format') === 'csv' ? 'csv' : 'md';
-  const body = kind === 'bom' ? bomExport(p, { format }) : shoppingList(p, { format, cost: s.costTracking, currency: s.currency });
+  // A shopping list can be limited to some lines: what's still left to buy.
+  const only = query.get('lines') ? new Set(query.get('lines').split(',').map(Number).filter(Boolean)) : null;
+  const shown = only ? { ...p, lines: p.lines.filter(l => only.has(l.id)) } : p;
+  const body = kind === 'bom' ? bomExport(p, { format }) : shoppingList(shown, { format, cost: s.costTracking, currency: s.currency });
   const type = format === 'csv' ? 'text/csv' : 'text/markdown';
   const headers = query.get('download') === '1' ? download(`${slug(p.name)}-${kind === 'bom' ? 'bom' : 'shopping-list'}.${format}`, `${type}; charset=utf-8`) : {};
   return { raw: body, type: `${type}; charset=utf-8`, headers };

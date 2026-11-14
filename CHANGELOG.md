@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+### Parts
+- On a computer the list is a table: name, package, part number, location and amount, sorted by clicking a heading. Phones keep two-line rows. A column most parts leave empty is left out
+- Only the rows on screen are drawn: with 1,600 parts the page holds about 660 elements instead of 18,800, and filtering takes 16 ms on a desktop (was 230 ms) and 66 ms on a slowed-down phone (was over a second)
+- Wide screens show the chosen part beside the list instead of in a pop-up; changes save as you type, and the arrow keys move from part to part
+- Where-used: a part's details list the projects that use it and how many each needs; parts your planned and building projects need more of than you have are flagged "Short", with a **Short for projects** filter
+- History for every part (when, old → new, and why: edited, built, received, added from a kit) and undo for the last change, from the part's history, a toast after changing an amount, or ⌘Z / Ctrl+Z. One action is one undo, including a whole build, a kit or a received order
+- Browse by location in the sidebar (and a Location menu on phones)
+- Printable location labels with a QR code each, for Avery 5160, Avery 5163 or plain paper; scanning one opens that location's parts
+- When every part in a category is in the same place, the location shows once next to the category
+- Drop a CSV on the parts page, or paste a list while not typing in a field, to add parts from it
+- Delete and Merge moved into a "…" menu in the part sheet
+
+### Projects
+- Lines that need you come first; the ones in stock fold away under one row, and the green "In stock" tags are gone
+- The review notice is one line with **Accept all**; whether confirmed matches remember the BOM's name is now a setting
+- The shopping list is a checklist: tick things off as they arrive, and "I got these" adds only what's ticked. Copy and CSV give what's still to get
+- Import BOM is a drop area: paste, open or drop a file, and see how many parts it found and how many you already have before importing
+- Drop a BOM file on a project, or paste one, to import it
+
+### Everywhere
+- ⌘K / Ctrl+K quick jump to parts, projects, locations and actions, also in the sidebar
+- ? shows the keyboard shortcuts
+- Pages are centered in the window; the sidebar folds to icons at iPad widths
+- Contrast: secondary text and counts now meet WCAG AA (4.5:1) in light and dark themes; the lightest gray is kept for icons
+- The search box no longer grabs focus when the page opens on a computer (press / to search); on phones the pinned search bar is opaque
+- Export uses the share icon; on phones one + button holds Add part, Paste a list and Add a kit
+- Loading shows placeholder rows instead of a blank page
+
+### Fixes
+- The shopping list and Import BOM sheets no longer show a stray "false" when a notice or option doesn't apply
+
 ## v0.2.0 (2026-11-03)
 
 ### Parts

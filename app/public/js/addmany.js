@@ -5,6 +5,7 @@ import { formatStock, LEVEL_SHORT } from '../shared/stock.js';
 import { KITS, kitRows, RESISTOR_STEPS, CAPACITOR_STEPS, PACKAGES, LED_COLORS, CONNECTOR_FAMILIES, SCREW_SIZES, SCREW_KINDS, SEMICONDUCTORS } from '../shared/kits.js';
 import { formatOhms, formatFarads, ELECTROLYTIC_KIT } from '../shared/values.js';
 import { datalist, field } from './editor.js';
+import { dropArea } from './drop.js';
 
 function tape(text) {
   return h('span.tape', { title: 'Location' }, text);
@@ -80,7 +81,7 @@ async function submitRows(rows, { category = '', location = '', level = null } =
 // ---------- paste a list ----------
 export function openPasteList(initial = '') {
   const s = sheet({ title: 'Paste a list', subtitle: 'One part per line, a table or a CSV file. Quantities like “10x”, “×10” or a Qty column are picked up.', size: 'lg' });
-  const ta = h('textarea.input.paste-area', { rows: '7', spellcheck: 'false', placeholder: '10x 10k resistor 0805\n5x 100nF ceramic capacitor\nESP32-S3 dev board ×2\nSSD1306 OLED 0.96in, 3' });
+  const ta = h('textarea.input.paste-area', { rows: '6', spellcheck: 'false', 'aria-label': 'List of parts', placeholder: '10x 10k resistor 0805\n5x 100nF ceramic capacitor\nESP32-S3 dev board ×2\n\nOr drop a CSV file on this box.' });
   ta.value = initial;
   const fileInput = h('input', { type: 'file', accept: '.csv,.tsv,.txt,.md,text/*', hidden: true, onchange: async e => {
     const f = e.target.files[0];
@@ -91,15 +92,11 @@ export function openPasteList(initial = '') {
   const cat = h('input.input', { list: 'dl-cats2', placeholder: 'Keep from list', autocomplete: 'off' });
   const loc = h('input.input', { list: 'dl-locs2', placeholder: 'Keep from list', autocomplete: 'off' });
   const previewEl = h('div.paste-preview');
-  const status = h('p.paste-status');
+  const status = h('span.dropzone-hint');
   const preview = previewList(previewEl, { category: () => cat.value.trim(), location: () => loc.value.trim() });
 
   s.body.append(
-    ta,
-    h('div.paste-tools',
-      h('button.btn.btn-quiet.btn-sm', { type: 'button', onclick: () => fileInput.click() }, icon('file'), 'Open a file'),
-      fileInput,
-      status),
+    dropArea(ta, [h('button.btn.btn-quiet.btn-sm', { type: 'button', onclick: () => fileInput.click() }, icon('file'), 'Open a file'), fileInput, status]),
     h('div.form-row.paste-apply',
       field('Category for all', cat),
       field('Location for all', loc)),

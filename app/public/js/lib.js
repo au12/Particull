@@ -36,6 +36,12 @@ function append(el, children) {
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
+/** Append children the way h() does: skipping false and null, flattening arrays. */
+export function add(el, ...children) {
+  append(el, children);
+  return el;
+}
+
 export function clear(el, ...children) {
   el.replaceChildren();
   append(el, children);
@@ -65,6 +71,7 @@ const P = {
   back: '<path d="M15 5.5 8.5 12l6.5 6.5"/>',
   chevron: '<path d="m9 5.5 6.5 6.5L9 18.5"/>',
   down: '<path d="m6 9.5 6 6 6-6"/>',
+  up: '<path d="m6 14.5 6-6 6 6"/>',
   updown: '<path d="m8 9.5 4-4 4 4M8 14.5l4 4 4-4"/>',
   refresh: '<path d="M19.5 8A8 8 0 0 0 5 7.4M4.5 16a8 8 0 0 0 14.5.6"/><path d="M19.5 3.5V8H15M4.5 20.5V16H9"/>',
   sort: '<path d="M7 4v16m0 0-3-3m3 3 3-3M17 20V4m0 0-3 3m3-3 3 3"/>',
@@ -84,6 +91,16 @@ const P = {
   database: '<ellipse cx="12" cy="6" rx="7.5" ry="2.8"/><path d="M4.5 6v12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8V6M4.5 12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8"/>',
   offline: '<path d="M3 3l18 18M8.5 16.5a5 5 0 0 1 7 0M5 12.6a10 10 0 0 1 4.2-2.4M14.8 10.2A10 10 0 0 1 19 12.6M2 9a15 15 0 0 1 4.4-2.8M11 5.5A15 15 0 0 1 22 9"/><circle cx="12" cy="20" r="0.6"/>',
   ruler: '<rect x="2.5" y="8" width="19" height="8" rx="1.5"/><path d="M6.5 8v3M10 8v4M13.5 8v3M17 8v4"/>',
+  share: '<path d="M12 14.5V3.5m0 0L8.2 7.3M12 3.5l3.8 3.8"/><path d="M8.5 10H7a2 2 0 0 0-2 2v6.5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V12a2 2 0 0 0-2-2h-1.5"/>',
+  qr: '<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><path d="M14 14h2.5v2.5H14zM17.5 17.5H20V20h-2.5zM14 19.5h1M19.5 14v1"/>',
+  printer: '<path d="M7 9V4h10v5M7 17H5a1.5 1.5 0 0 1-1.5-1.5V10.5A1.5 1.5 0 0 1 5 9h14a1.5 1.5 0 0 1 1.5 1.5v5A1.5 1.5 0 0 1 19 17h-2"/><rect x="7" y="14" width="10" height="6.5" rx="1"/>',
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  undo: '<path d="M9 14 4.5 9.5 9 5"/><path d="M4.5 9.5h10a5 5 0 0 1 0 10H11"/>',
+  keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6.5 10h1M10 10h1M13.5 10h1M17 10h.5M6.5 14h.5M9.5 14h5M17 14h.5"/>',
+  drawer: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 12h17M10 8.5h4M10 15.5h4"/>',
+  inspector: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M14 4.5v15M16.5 8.5h1.5M16.5 11.5h1.5"/>',
+  import: '<path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-10z"/><path d="M14 3.5v5h5M12 10.5v6.5m0 0-2.6-2.6M12 17l2.6-2.6"/>',
+  jump: '<path d="M9 6.5a2.5 2.5 0 1 0-2.5 2.5H9zM15 6.5A2.5 2.5 0 1 1 17.5 9H15zM9 17.5A2.5 2.5 0 1 1 6.5 15H9zM15 17.5a2.5 2.5 0 1 0 2.5-2.5H15zM9 9h6v6H9z"/>',
 };
 
 export function icon(name, cls = '') {
@@ -172,16 +189,17 @@ export function showError(e) {
  * Open a sheet. Bottom sheet on phones, side panel or centered dialog on wider screens.
  * @returns {{el: HTMLDialogElement, body: HTMLElement, footer: HTMLElement, close: Function}}
  */
-export function sheet({ title, subtitle, size = 'md', onClose, footer: withFooter = true } = {}) {
+export function sheet({ title, subtitle, size = 'md', onClose, footer: withFooter = true, menuItems = null, menuLabel = 'More actions' } = {}) {
   const body = h('div.sheet-body');
   const footer = h('div.sheet-footer');
   const titleId = `sheet-title-${Math.random().toString(36).slice(2, 8)}`;
   const closeBtn = h('button.icon-btn.sheet-close', { type: 'button', 'aria-label': 'Close', onclick: () => close() }, icon('x'));
+  const menuBtn = menuItems && h('button.icon-btn.sheet-menu', { type: 'button', 'aria-label': menuLabel, onclick: e => menu(e.currentTarget, typeof menuItems === 'function' ? menuItems() : menuItems) }, icon('more'));
   const el = h(`dialog.sheet.sheet-${size}`, { 'aria-labelledby': titleId },
     h('div.sheet-panel',
       h('header.sheet-head',
         h('div.sheet-titles', h('h2', { id: titleId }, title), subtitle && h('p.sheet-sub', subtitle)),
-        closeBtn),
+        h('div.sheet-head-actions', menuBtn, closeBtn)),
       body,
       withFooter && footer));
   let closed = false;
@@ -321,6 +339,32 @@ export function downloadUrl(url) {
 }
 
 export const isTouch = () => matchMedia('(pointer: coarse)').matches;
+
+/** Whether the person is typing somewhere, so single-key shortcuts should stay out of the way. */
+export function isTyping(el = document.activeElement) {
+  if (!el) return false;
+  if (el.isContentEditable) return true;
+  if (el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return true;
+  return el.tagName === 'INPUT' && !/^(checkbox|radio|button|submit|range|color|file)$/i.test(el.type);
+}
+
+export const kbd = text => h('kbd', text);
+export const isMac = () => /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+/** "⌘" on Apple keyboards, "Ctrl" elsewhere. */
+export const modKey = () => (isMac() ? '⌘' : 'Ctrl');
+
+/** "Today, 3:04 PM", "Yesterday, 9:12 AM", "Nov 2, 3:00 AM", "Nov 2, 2025". */
+export function formatWhen(iso, { time = true } = {}) {
+  const d = new Date(iso);
+  const today = new Date();
+  const yesterday = new Date(Date.now() - 864e5);
+  const t = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  if (d.toDateString() === today.toDateString()) return time ? `Today, ${t}` : 'Today';
+  if (d.toDateString() === yesterday.toDateString()) return time ? `Yesterday, ${t}` : 'Yesterday';
+  const sameYear = d.getFullYear() === today.getFullYear();
+  const day = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: sameYear ? undefined : 'numeric' });
+  return time && sameYear ? `${day}, ${t}` : day;
+}
 
 export function readFile(file) {
   return new Promise((resolve, reject) => {

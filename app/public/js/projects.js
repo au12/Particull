@@ -1,8 +1,15 @@
 // Projects list, a project's BOM checked against inventory, and everything you do from there.
-import { h, clear, icon, api, toast, showError, sheet, confirmSheet, menu, plural, copyText, downloadUrl, isTouch, readFile, money, stepper } from './lib.js';
-import { state, loadParts, costOn } from './state.js';
+import { h, add, clear, icon, api, toast, showError, sheet, confirmSheet, menu, plural, copyText, downloadUrl, isTouch, readFile, money, stepper, debounce } from './lib.js';
+import { state, loadParts, costOn, onChange } from './state.js';
 import { openPartEditor } from './editor.js';
 import { formatNumber, formatStock, unitLabel, LEVEL_LABELS } from '../shared/stock.js';
+import { acceptDropAndPaste, dropArea } from './drop.js';
+
+/** Keep a BOM's name for a part as another name for it, so it matches next time (a setting). */
+const rememberNames = () => state.settings.rememberMatches !== false;
+
+const skeletonRows = (n, cls = '') => h(`div.skeleton${cls}`, { 'aria-busy': 'true', 'aria-label': 'Loading' },
+  Array.from({ length: n }, (_, i) => h('div.skeleton-row', h('span.skel', { style: { width: `${34 + ((i * 29) % 34)}%` } }))));
 
 // Where a project is. Archived is separate: any project can be put away.
 const PROJECT_STATUS = {
@@ -52,7 +59,7 @@ function statusLine(summary) {
 
 // ---------- list ----------
 export async function renderProjects(root) {
-  const list = h('div.project-groups', h('div.loading', 'Loading projects'));
+  const list = h('div.project-groups', skeletonRows(4));
   clear(root,
     h('header.page-head',
       h('div', h('h1', 'Projects'), h('p.page-sub', 'Check a project’s bill of materials against your parts.')),
@@ -98,7 +105,7 @@ export async function renderProjects(root) {
 
 // ---------- new project ----------
 function bomInput({ value = '' } = {}) {
-  const ta = h('textarea.input.paste-area', { rows: '8', spellcheck: 'false', placeholder: '| Qty | Part | Part number | Package | Notes |\n| --- | --- | --- | --- | --- |\n| 1 | ESP32-S3 dev board | | | |\n| 4 | 10k resistor | | 0805 | pull-ups |\n\nA table, a CSV/KiCad BOM, or one part per line all work.' });
+  const ta = h('textarea.input.paste-area', { rows: '7', spellcheck: 'false', 'aria-label': 'Bill of materials', placeholder: 'Paste a bill of materials here: a table from a chat, a CSV or KiCad BOM, or one part per line. Or drop the file on this box.' });
   ta.value = value;
   const file = h('input', { type: 'file', accept: '.csv,.tsv,.txt,.md,text/*', hidden: true, onchange: async e => {
     const f = e.target.files[0];
@@ -106,14 +113,34 @@ function bomInput({ value = '' } = {}) {
     try { ta.value = await readFile(f); ta.dispatchEvent(new Event('input')); } catch (err) { showError(err); }
     e.target.value = '';
   } });
-  const copyBtn = h('button.btn.btn-quiet.btn-sm', { type: 'button', onclick: async () => {
+  const copyBtn = h('button.btn.btn-quiet.btn-sm', { type: 'button', title: 'Instructions to paste into a chat, so the BOM comes back in a format Particull reads', onclick: async () => {
     try {
       const { text } = await api('/bom-format');
       if (await copyText(text)) toast('Copied. Add it to your message so Claude answers in a format Particull reads.');
     } catch (e) { showError(e); }
-  } }, icon('copy'), 'Copy BOM instructions for Claude');
-  const tools = h('div.paste-tools', h('button.btn.btn-quiet.btn-sm', { type: 'button', onclick: () => file.click() }, icon('file'), 'Open a file'), file, copyBtn);
-  return { ta, tools };
+  } }, icon('copy'), 'BOM instructions for Claude');
+  const zone = dropArea(ta, [h('button.btn.btn-quiet.btn-sm', { type: 'button', onclick: () => file.click() }, icon('file'), 'Open a file'), file, copyBtn]);
+  const preview = h('div.parse-preview', { 'aria-live': 'polite' });
+  // A quick look at what Particull read, before importing.
+  const look = debounce(async () => {
+    if (!ta.value.trim()) { clear(preview); return; }
+    try {
+      const r = await api('/parse', { method: 'POST', body: { text: ta.value } });
+      if (!r.rows.length) { clear(preview, h('span', 'No parts found yet. A table, a CSV or one part per line works.')); return; }
+      const have = r.rows.filter(x => x.match && (x.match.exact || x.match.score >= 0.85)).length;
+      const maybe = r.rows.filter(x => x.match && !(x.match.exact || x.match.score >= 0.85)).length;
+      const fresh = r.rows.length - have - maybe;
+      const bits = [have && `${have} you have`, maybe && `${maybe} to check`, fresh && `${fresh} new`].filter(Boolean);
+      clear(preview,
+        h('span', h('strong', plural(r.rows.length, 'part')), ` found${r.format !== 'list' ? ` in a ${r.format}` : ''}: ${bits.join(', ')}.`),
+        h('div.parse-names',
+          r.rows.slice(0, 14).map(x => h(`span.parse-name${x.match ? '' : '.is-new'}`, { title: x.match ? `Looks like ${x.match.name}` : 'Not in your parts' }, `${x.qty > 1 ? `${formatNumber(x.qty)}× ` : ''}${x.name}`)),
+          r.rows.length > 14 && h('span.parse-name.is-new', `${r.rows.length - 14} more`)));
+    } catch (e) { clear(preview, h('span', e.message)); }
+  }, 300);
+  ta.addEventListener('input', look);
+  if (value) look();
+  return { ta, zone, preview };
 }
 
 export function openNewProject() {
@@ -121,7 +148,7 @@ export function openNewProject() {
   const name = h('input.input.input-lg', { placeholder: 'e.g. Dingr v2 prototype', autocomplete: 'off', required: true });
   let builds = 1;
   const buildStep = stepper({ value: 1, label: 'How many to build', onDelta: d => { builds = Math.max(1, builds + d); buildStep.update(builds); }, onSet: v => { builds = Math.max(1, v); buildStep.update(builds); } });
-  const { ta, tools } = bomInput();
+  const { ta, zone, preview } = bomInput();
   let status = 'planned';
   const statusSeg = h('div.segmented', { role: 'radiogroup', 'aria-label': 'Status' },
     ['idea', 'planned', 'building'].map(k => h('button.seg', {
@@ -133,7 +160,7 @@ export function openNewProject() {
     h('div.form-row.new-project-row',
       h('div.field', h('span.field-label', 'Status'), statusSeg),
       h('div.field', h('span.field-label', 'How many to build'), buildStep)),
-    h('div.field', h('span.field-label', 'Bill of materials', h('span.optional', 'optional, you can add it later')), ta, tools));
+    h('div.field', h('span.field-label', 'Bill of materials', h('span.optional', 'optional, you can add it later')), zone, preview));
   s.body.append(form);
   const btn = h('button.btn.btn-primary', { type: 'button', onclick: create }, 'Create project');
   s.footer.append(h('span'), h('div.footer-right', h('button.btn', { type: 'button', onclick: () => s.close() }, 'Cancel'), btn));
@@ -158,11 +185,11 @@ function importSummary(added, sm) {
 }
 
 // ---------- one project ----------
-const projectView = { tab: 'all', remember: true };
+const projectView = { tab: 'all', open: { ok: false, skip: false } };
 
 export function renderProject(root, id) {
   let project = null;
-  const body = h('div.project-body', h('div.loading', 'Loading project'));
+  const body = h('div.project-body', h('div.skel.skel-title'), skeletonRows(6));
   clear(root, h('a.back-link', { href: '#/projects' }, icon('back'), 'Projects'), body);
 
   async function load() {
@@ -241,8 +268,8 @@ export function renderProject(root, id) {
           h('div.project-title-row', h('h1', p.name), statusBtn, p.archived && h('span.status-pill.status-archived', 'Archived')),
           p.notes ? h('p.page-sub.project-notes', p.notes) : null),
         h('div.page-actions',
-          h('button.btn.btn-quiet.hide-sm', { type: 'button', onclick: () => openImport(p) }, icon('upload'), 'Import BOM'),
-          h('button.icon-btn.show-sm', { type: 'button', 'aria-label': 'Import BOM', onclick: () => openImport(p) }, icon('upload')),
+          h('button.btn.btn-quiet.hide-sm', { type: 'button', onclick: () => openImport(p) }, icon('import'), 'Import BOM'),
+          h('button.icon-btn.show-sm', { type: 'button', 'aria-label': 'Import BOM', onclick: () => openImport(p) }, icon('import')),
           moreBtn)),
 
       h('section.project-summary',
@@ -258,15 +285,10 @@ export function renderProject(root, id) {
           h('button.btn', { type: 'button', onclick: () => openShopping(p), disabled: toBuy === 0 && sm.review === 0 }, icon('cart'), toBuy ? `Shopping list (${toBuy})` : 'Shopping list'),
           h('button.btn', { type: 'button', onclick: () => openBuild(p) }, icon('build'), 'Build'))),
 
-      sm.review > 0 && h('div.review-banner',
-        h('div.review-text',
-          h('strong', `${plural(sm.review, 'line')} ${sm.review === 1 ? 'needs' : 'need'} a quick check`),
-          h('span', 'Particull found parts that look the same under a different name. Confirm each one, or accept them all.')),
-        h('div.review-actions',
-          h('label.toggle-row.toggle-sm',
-            h('input.switch', { type: 'checkbox', checked: projectView.remember, onchange: e => { projectView.remember = e.target.checked; } }),
-            h('span', 'Remember these names')),
-          h('button.btn.btn-warn', { type: 'button', onclick: () => act(() => api(`/projects/${p.id}/accept-all`, { method: 'POST', body: { remember: projectView.remember } }), r => `Accepted ${plural(r.accepted, 'match', 'matches')}.`) }, icon('check'), 'Accept all'))),
+      sm.review > 0 && h('div.review-banner', { role: 'status' },
+        icon('warn'),
+        h('span.review-text', `${plural(sm.review, 'line')} ${sm.review === 1 ? 'looks' : 'look'} like ${sm.review === 1 ? 'a part' : 'parts'} you have under another name`),
+        h('button.btn.btn-sm.btn-warn', { type: 'button', title: 'Confirm every suggested match', onclick: () => act(() => api(`/projects/${p.id}/accept-all`, { method: 'POST', body: { remember: rememberNames() } }), r => `Accepted ${plural(r.accepted, 'match', 'matches')}.`) }, icon('check'), 'Accept all')),
 
       p.lines.length > 0 && h('div.tabs', { role: 'tablist' }, tabs.map(([k, label, n]) => h('button.tab', {
         type: 'button', role: 'tab', 'aria-selected': String(projectView.tab === k),
@@ -274,13 +296,13 @@ export function renderProject(root, id) {
       }, label, h('span.tab-count', n)))),
 
       p.lines.length
-        ? h('div.bom-lines', lines.map(lineRow))
+        ? h('div.bom-lines', bomRows(lines))
         : h('div.empty',
           h('div.empty-art', icon('paste')),
           h('h2', 'Add the bill of materials'),
           h('p', 'Paste a BOM from a chat, open a CSV or KiCad export, or add lines one at a time.'),
           h('div.empty-actions',
-            h('button.btn.btn-primary', { type: 'button', onclick: () => openImport(p) }, icon('upload'), 'Import BOM'),
+            h('button.btn.btn-primary', { type: 'button', onclick: () => openImport(p) }, icon('import'), 'Import BOM'),
             h('button.btn', { type: 'button', onclick: () => editLine(null) }, icon('plus'), 'Add a line'))),
 
       p.lines.length > 0 && h('button.btn.btn-quiet.add-line', { type: 'button', onclick: () => editLine(null) }, icon('plus'), 'Add a line'),
@@ -294,6 +316,25 @@ export function renderProject(root, id) {
 
   function tabOf(l) {
     return l.status === 'short' || l.status === 'missing' ? 'buy' : l.status;
+  }
+
+  // What needs you comes first; lines that are fine fold away under one row each.
+  function bomRows(lines) {
+    if (projectView.tab !== 'all') return lines.map(lineRow);
+    const needsYou = lines.filter(l => l.status !== 'ok' && l.status !== 'skip');
+    if (!needsYou.length) return lines.map(lineRow);
+    const fold = (kind, list) => {
+      if (!list.length) return null;
+      const open = projectView.open[kind];
+      return [
+        h('button.bom-fold', { type: 'button', 'aria-expanded': String(open), onclick: () => { projectView.open[kind] = !open; set(project); } },
+          icon(kind === 'ok' ? 'check' : 'x', `fold-icon${kind === 'skip' ? ' is-skip' : ''}`),
+          h('span', h('span.fold-count', list.length), kind === 'ok' ? ' in stock' : ' not tracked'),
+          icon('chevron', 'chev')),
+        open && list.map(lineRow),
+      ];
+    };
+    return [needsYou.map(lineRow), fold('ok', lines.filter(l => l.status === 'ok')), fold('skip', lines.filter(l => l.status === 'skip'))];
   }
 
   function lineRow(l) {
@@ -322,7 +363,7 @@ export function renderProject(root, id) {
     const head = h('div.line-head',
       qtyText,
       h('div.line-title', h('span.line-name', l.name), meta.length > 0 && h('div.part-meta', meta)),
-      h('span.pill', { class: `pill-${l.status}` }, pillText),
+      l.status !== 'ok' && h('span.pill', { class: `pill-${l.status}` }, pillText),
       h('button.icon-btn.icon-btn-sm', { type: 'button', 'aria-label': `More for ${l.name}`, onclick: lineMenu }, icon('more')));
 
     let detail = null;
@@ -335,7 +376,7 @@ export function renderProject(root, id) {
           h('span.review-stock', l.part.stockLevel ? formatStock(l.part) : `${amt(l.part.qty, l.part)} on hand`, l.part.location ? h('span.tape', l.part.location) : null),
           notes.length > 0 && h('span.review-warn', icon('warn'), notes.join(', ').replace(/^./, c => c.toUpperCase()))),
         h('div.review-buttons',
-          h('button.btn.btn-sm.btn-primary', { type: 'button', onclick: () => updateLine(l, { partId: l.part.id, state: 'confirmed', remember: projectView.remember }) }, icon('check'), 'Same part'),
+          h('button.btn.btn-sm.btn-primary', { type: 'button', onclick: () => updateLine(l, { partId: l.part.id, state: 'confirmed', remember: rememberNames() }) }, icon('check'), 'Same part'),
           h('button.btn.btn-sm', { type: 'button', onclick: () => pickPart(l) }, 'Pick another'),
           h('button.btn.btn-sm.btn-quiet', { type: 'button', onclick: () => updateLine(l, { state: 'none', partId: null }) }, 'I don’t have it')));
     } else if (l.status === 'ok' || l.status === 'short' || (l.status === 'missing' && l.part)) {
@@ -365,7 +406,7 @@ export function renderProject(root, id) {
     const s = sheet({ title: 'Match a part', subtitle: `“${l.name}”${l.package ? ` (${l.package})` : ''}${l.mpn ? `, ${l.mpn}` : ''}`, size: 'md' });
     const search = h('input.search-input', { type: 'search', placeholder: 'Search your parts', autocomplete: 'off', 'aria-label': 'Search your parts' });
     const results = h('div.pick-list');
-    const remember = h('input.switch', { type: 'checkbox', checked: projectView.remember });
+    const remember = h('input.switch', { type: 'checkbox', checked: rememberNames() });
     s.body.append(
       h('label.search', icon('search'), search),
       results,
@@ -469,11 +510,11 @@ export function renderProject(root, id) {
     } catch (e) { showError(e); }
   }
 
-  function openImport(p) {
+  function openImport(p, text = '') {
     const s = sheet({ title: 'Import BOM', subtitle: `Into ${p.name}`, size: 'lg' });
-    const { ta, tools } = bomInput();
+    const { ta, zone, preview } = bomInput({ value: text });
     const replace = h('input.switch', { type: 'checkbox' });
-    s.body.append(ta, tools,
+    add(s.body, zone, preview,
       p.lines.length > 0 && h('label.toggle-row', replace, h('span', `Replace the ${plural(p.lines.length, 'line')} already here`)));
     const btn = h('button.btn.btn-primary', { type: 'button', onclick: run }, 'Import');
     s.footer.append(h('span'), h('div.footer-right', h('button.btn', { type: 'button', onclick: () => s.close() }, 'Cancel'), btn));
@@ -483,27 +524,84 @@ export function renderProject(root, id) {
       const r = await act(() => api(`/projects/${p.id}/bom`, { method: 'POST', body: { text: ta.value, replace: replace.checked } }), r2 => importSummary(r2.added, r2.project.summary));
       if (r) { projectView.tab = r.project.summary.review ? 'review' : 'all'; draw(); s.close(); } else btn.disabled = false;
     }
-    setTimeout(() => ta.focus());
+    setTimeout(() => { ta.focus(); if (text) ta.setSelectionRange(0, 0); });
   }
 
-  async function openShopping(p) {
+  // A checklist: tick things off as you get them, then add what you got to your parts.
+  function openShopping(p) {
+    const lines = p.lines.filter(l => l.status === 'short' || l.status === 'missing');
+    const key = `particull.shop.${p.id}`;
+    let got = new Set();
+    try { got = new Set(JSON.parse(localStorage.getItem(key) || '[]')); } catch { /* private mode */ }
+    for (const id of [...got]) if (!lines.some(l => l.id === id)) got.delete(id);
+    const keep = () => { try { if (got.size) localStorage.setItem(key, JSON.stringify([...got])); else localStorage.removeItem(key); } catch { /* ignore */ } };
+
     const s = sheet({ title: 'Shopping list', subtitle: p.builds > 1 ? `For ${p.builds} builds of ${p.name}` : p.name, size: 'md' });
-    const out = h('textarea.input.export-area', { readOnly: true, rows: '10', 'aria-label': 'Shopping list' });
-    s.body.append(
+    const tools = h('div.shop-tools');
+    const list = h('div.shop-list');
+    const receiveBtn = h('button.btn.btn-primary', { type: 'button', onclick: receive });
+    const copyBtn = h('button.btn', { type: 'button', onclick: copy, title: 'Copy what’s still to get' }, icon('copy'), 'Copy');
+    add(s.body,
       p.summary.review > 0 && h('p.notice', icon('warn'), `${plural(p.summary.review, 'line')} still ${p.summary.review === 1 ? 'needs' : 'need'} checking, so this list may change.`),
-      out,
-      h('p.field-hint', 'When the order arrives, add it all to your parts in one go. Lines that weren’t in your parts become new parts.'));
-    const copyBtn = h('button.btn', { type: 'button', onclick: async () => { if (await copyText(out.value)) toast('Shopping list copied.'); } }, icon('copy'), 'Copy');
-    const receive = h('button.btn.btn-primary', { type: 'button', onclick: async () => {
-      const ok = await confirmSheet({ title: 'Add these to your parts?', message: `This adds the quantities on the list to your parts. ${p.summary.missing ? 'Parts you don’t have yet are created.' : ''}`, confirm: 'Add to parts' });
-      if (!ok) return;
-      const r = await act(() => api(`/projects/${p.id}/receive`, { method: 'POST', body: {} }), r2 => `Added to ${plural(r2.added + r2.created, 'part')}${r2.created ? `, ${r2.created} of them new` : ''}.`);
-      if (r) { s.close(); loadParts(); }
-    } }, icon('check'), 'I got these');
+      lines.length ? [tools, list, h('p.field-hint.shop-hint', 'Tick things off as you get them. “I got these” adds what’s ticked to your parts; anything you didn’t have yet becomes a new part.')]
+        : h('div.empty.empty-small', h('p', 'Nothing to buy yet.')));
     s.footer.append(
-      h('button.btn.btn-quiet', { type: 'button', onclick: () => downloadUrl(`/api/projects/${p.id}/export?kind=shopping&format=csv&download=1`) }, icon('download'), 'CSV'),
-      h('div.footer-right', copyBtn, p.summary.short + p.summary.missing > 0 && receive));
-    try { out.value = await api(`/projects/${p.id}/export?kind=shopping`, { raw: true }); } catch (e) { out.value = e.message; }
+      h('button.btn.btn-quiet', { type: 'button', disabled: !lines.length, onclick: () => downloadUrl(`/api/projects/${p.id}/export?kind=shopping&format=csv&download=1&lines=${chosenForCopy().map(l => l.id).join(',')}`) }, icon('download'), 'CSV'),
+      h('div.footer-right', lines.length > 0 && copyBtn, lines.length > 0 && receiveBtn));
+
+    function draw() {
+      const n = got.size;
+      const all = n === lines.length;
+      clear(tools,
+        h('span', n ? `${n} of ${lines.length} ticked` : plural(lines.length, 'thing') + ' to get'),
+        h('button.btn.btn-quiet.btn-sm', { type: 'button', onclick: () => { got = all ? new Set() : new Set(lines.map(l => l.id)); keep(); draw(); } }, all ? 'Untick all' : 'Tick all'));
+      clear(list, lines.map(l => {
+        const on = got.has(l.id);
+        const meta = [
+          [l.mpn, l.package].filter(Boolean).join(', '),
+          l.level === 'low' ? 'running low, top up' : l.have ? `have ${amt(l.have, l.part)}, need ${amt(l.need, l.part)}` : '',
+        ].filter(Boolean).join(' · ');
+        return h(`label.shop-row${on ? '.is-got' : ''}`,
+          h('input.tick', { type: 'checkbox', checked: on, 'aria-label': `Got ${l.name}`, onchange: e => { if (e.target.checked) got.add(l.id); else got.delete(l.id); keep(); draw(); } }),
+          h('div.shop-main', h('span.shop-name', l.name), meta && h('span.shop-meta', meta)),
+          h('span.shop-qty', amt(l.short, l.part)));
+      }));
+      receiveBtn.replaceChildren(icon('check'), n && !all ? `I got these (${n})` : 'I got everything');
+    }
+
+    // Copy and CSV give what's still to get, or the whole list if nothing's ticked.
+    function chosenForCopy() {
+      const left = lines.filter(l => !got.has(l.id));
+      return left.length && left.length < lines.length ? left : lines;
+    }
+
+    async function copy() {
+      const use = chosenForCopy();
+      try {
+        const text = await api(`/projects/${p.id}/export?kind=shopping&lines=${use.map(l => l.id).join(',')}`, { raw: true });
+        if (await copyText(text)) toast(use.length === lines.length ? 'Shopping list copied.' : `Copied the ${plural(use.length, 'thing')} still to get.`);
+      } catch (e) { showError(e); }
+    }
+
+    async function receive() {
+      const ids = got.size ? [...got] : lines.map(l => l.id);
+      const picked = lines.filter(l => ids.includes(l.id));
+      const fresh = picked.filter(l => !l.part).length;
+      const ok = await confirmSheet({
+        title: picked.length === lines.length ? 'Add everything to your parts?' : `Add ${plural(picked.length, 'line')} to your parts?`,
+        message: `The amounts on the list go into your parts.${fresh ? ` ${plural(fresh, 'part')} you didn’t have yet ${fresh === 1 ? 'is' : 'are'} created.` : ''}`,
+        confirm: 'Add to parts',
+      });
+      if (!ok) return;
+      const r = await act(() => api(`/projects/${p.id}/receive`, { method: 'POST', body: { lineIds: ids } }), r2 => `Added to ${plural(r2.added + r2.created, 'part')}${r2.created ? `, ${r2.created} of them new` : ''}.`);
+      if (!r) return;
+      for (const id of ids) got.delete(id);
+      keep();
+      s.close();
+      loadParts();
+    }
+
+    if (lines.length) draw();
   }
 
   function openBuild(p) {
@@ -555,5 +653,8 @@ export function renderProject(root, id) {
   }
 
   load();
-  return () => {};
+  // Drop a BOM file anywhere on the page, or paste one, to import it.
+  const stopDrop = acceptDropAndPaste({ title: 'Drop to import a BOM', hint: 'A CSV, a KiCad BOM, or one part per line', onText: text => { if (project) openImport(project, text); } });
+  const off = onChange(what => { if (what === 'undo') load(); });
+  return () => { stopDrop(); off(); };
 }
